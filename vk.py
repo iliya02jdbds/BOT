@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # ==================== تنظیمات ====================
-TOKEN = "8982112578:AAGSIZKrrFlqn-QqpFEoDcJdCS4eDwDvMpY"
+TOKEN = os.environ["BOT_TOKEN"]
 # ⚠️ توکن بات رو توی همین فایل به صورت متن‌باز گذاشتی. چون این فایل ممکنه دست کس دیگه‌ای هم بیفته،
 # پیشنهاد می‌کنم از @BotFather دستور /revoke بزنی و یه توکن جدید بگیری.
 
