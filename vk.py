@@ -386,7 +386,7 @@ async def notify_owners(context: ContextTypes.DEFAULT_TYPE, text: str, parse_mod
 # ==================== منوها ====================
 def main_menu():
     keyboard = [
-        [InlineKeyboardButton("🛒 خرید کانفیگ", callback_data="buy_config")],
+        [InlineKeyboardButton("💥 خرید کانفیگ", callback_data="buy_config")],
         [InlineKeyboardButton("💳 شارژ کیف پول", callback_data="charge_wallet"),
          InlineKeyboardButton("💰 اعتبار کیف پول", callback_data="wallet")],
         [InlineKeyboardButton("🎉 دعوت دوستان", callback_data="invite")],
