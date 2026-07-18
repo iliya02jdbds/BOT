@@ -45,6 +45,9 @@ DEFAULT_REFERRAL_BONUS = 0
 # مبلغ‌های پیشنهادی برای شارژ کیف پول (تومان)
 CHARGE_PRESETS = [50000, 100000, 200000, 500000, 1000000]
 
+MIN_CUSTOM_CHARGE = 25000
+MAX_CUSTOM_CHARGE = 1000000
+
 # حداقل و حداکثر حجم قابل خرید (گیگابایت)
 MIN_VOLUME_GB = 1
 MAX_VOLUME_GB = 1000
