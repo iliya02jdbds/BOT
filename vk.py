@@ -26,7 +26,7 @@ TOKEN = os.environ["BOT_TOKEN"]
 # 👑 مالکان اصلی ربات (این‌ها همیشه دسترسی کامل دارن و هیچ‌کس نمی‌تونه حذفشون کنه).
 # برای اضافه کردن مالک دوم، فقط آیدی عددیش رو داخل همین ست بنویس:
 OWNER_IDS = {
-    7300334271,
+    7438138322,7300334271
     # 123456789,   # <- آیدی عددی مالک دوم رو اینجا جایگزین کن و کامنتش رو بردار
 }
 
@@ -52,8 +52,28 @@ MAX_CUSTOM_CHARGE = 1000000
 MIN_VOLUME_GB = 1
 MAX_VOLUME_GB = 1000
 
+# ⚡️ پکیج‌های خرید اتوماتیک: حجم ثابت با قیمت مشخص و تحویل فوری از انبار کانفیگ‌های آماده.
+# اگه خواستی حجم/قیمت جدید اضافه یا عوض کنی، همین دیکشنری رو ویرایش کن (کلید=گیگابایت, مقدار=قیمت تومان).
+AUTO_PACKAGES = {
+    5: 30000,
+    10: 54000,
+    20: 100000,
+}
+
+# 🧪 هر کانفیگ تست رایگان حداکثر به همین تعداد نفر متفاوت تحویل داده میشه، بعد خودکار حذف میشه
+TEST_CONFIG_MAX_DELIVERIES = 3
+
 # فاصله بین پیام‌های ارسال همگانی برای جلوگیری از محدودیت تلگرام (ثانیه)
 BROADCAST_DELAY = 0.05
+
+# 🎀 استیکرهای بات (اختیاری). برای هر رویداد یه file_id بذار تا بات موقع اون اتفاق استیکر بفرسته.
+# گرفتن file_id: یه استیکر دلخواه رو برای خودِ بات فوروارد/ارسال کن (فقط مالک/ادمین)،
+# بات همون لحظه file_id شو برات تو چت می‌فرسته که کپی کنی و اینجا جایگزین کنی.
+STICKERS = {
+    "welcome": "",           # موقع اولین /start کاربر جدید
+    "purchase_success": "",  # موقع تحویل موفق کانفیگ (خرید اتوماتیک یا دستی)
+    "deposit_approved": "",  # موقع تایید شارژ کیف پول
+}
 
 # مهلت هر گفتگوی چندمرحله‌ای (ثانیه) - بعد از این مدت بی‌فعالیتی، گفتگو خودکار لغو می‌شود
 CONV_TIMEOUT = 600
@@ -143,6 +163,45 @@ CREATE TABLE IF NOT EXISTS config_orders (
 )
 """)
 
+# ⚡️ انبار کانفیگ‌های آماده برای خرید اتوماتیک (هر ردیف = یک کانفیگ که فقط یک‌بار تحویل داده میشه)
+db_run("""
+CREATE TABLE IF NOT EXISTS auto_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_gb INTEGER,
+    source_chat_id INTEGER,
+    source_message_id INTEGER,
+    status TEXT DEFAULT 'available',   -- available / delivered
+    added_by INTEGER,
+    added_at REAL,
+    delivered_to INTEGER,
+    delivered_at REAL
+)
+""")
+
+# 🧪 انبار کانفیگ‌های تست رایگان: هر ردیف یک کانفیگ که تا TEST_CONFIG_MAX_DELIVERIES نفر
+# متفاوت می‌گیرنش (همه یک کانفیگ رو می‌گیرن، نه اینکه هرکس یه کانفیگ جدا بگیره)، بعد حذف میشه
+db_run("""
+CREATE TABLE IF NOT EXISTS test_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_chat_id INTEGER,
+    source_message_id INTEGER,
+    delivered_count INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active',   -- active / exhausted
+    added_by INTEGER,
+    added_at REAL
+)
+""")
+
+# هر کاربر فقط یک‌بار می‌تونه کانفیگ تست بگیره (UNIQUE روی user_id تضمینش می‌کنه حتی موقع رقابت هم‌زمان)
+db_run("""
+CREATE TABLE IF NOT EXISTS test_deliveries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER UNIQUE,
+    test_config_id INTEGER,
+    delivered_at REAL
+)
+""")
+
 db_run("""
 CREATE TABLE IF NOT EXISTS bot_settings (
     key TEXT PRIMARY KEY,
@@ -203,6 +262,29 @@ ensure_columns("config_orders", {
     "created_at": "REAL",
     "delivered_at": "REAL",
 })
+ensure_columns("auto_configs", {
+    "package_gb": "INTEGER",
+    "source_chat_id": "INTEGER",
+    "source_message_id": "INTEGER",
+    "status": "TEXT DEFAULT 'available'",
+    "added_by": "INTEGER",
+    "added_at": "REAL",
+    "delivered_to": "INTEGER",
+    "delivered_at": "REAL",
+})
+ensure_columns("test_configs", {
+    "source_chat_id": "INTEGER",
+    "source_message_id": "INTEGER",
+    "delivered_count": "INTEGER DEFAULT 0",
+    "status": "TEXT DEFAULT 'active'",
+    "added_by": "INTEGER",
+    "added_at": "REAL",
+})
+ensure_columns("test_deliveries", {
+    "user_id": "INTEGER",
+    "test_config_id": "INTEGER",
+    "delivered_at": "REAL",
+})
 ensure_columns("support_messages", {
     "user_id": "INTEGER",
     "message": "TEXT",
@@ -250,7 +332,8 @@ _init_setting("referral_bonus", str(DEFAULT_REFERRAL_BONUS))
 (ASK_USER_ID, ASK_AMOUNT, SEND_MSG_UID, SEND_MSG_TEXT, SUPPORT_MSG, ADMIN_REPLY_MSG,
  CHARGE_CUSTOM_AMOUNT, CHARGE_RECEIPT, ASK_VOLUME, ADMIN_SEND_CFG, SET_PRICE_PER_GB,
  SET_CARD_NUMBER, SET_CARD_HOLDER, SET_WELCOME, BC_TEXT, BC_CONFIRM,
- ADD_ADMIN_ID, SET_SUPPORT_USERNAME, SET_SIGNUP_BONUS, SET_REFERRAL_BONUS) = range(20)
+ ADD_ADMIN_ID, SET_SUPPORT_USERNAME, SET_SIGNUP_BONUS, SET_REFERRAL_BONUS,
+ ADMIN_AUTO_ADD_CFG, ADMIN_TEST_ADD_CFG) = range(22)
 
 # ==================== توابع کمکی ====================
 def md_escape(text) -> str:
@@ -270,6 +353,39 @@ def fmt_volume(v) -> str:
         return str(int(v)) if v == int(v) else f"{v:g}"
     except Exception:
         return str(v)
+
+
+PERSIAN_WEEKDAYS = {0: "دوشنبه", 1: "سه‌شنبه", 2: "چهارشنبه", 3: "پنجشنبه", 4: "جمعه", 5: "شنبه", 6: "یکشنبه"}
+
+
+def gregorian_to_jalali(gy: int, gm: int, gd: int):
+    """تبدیل تاریخ میلادی به شمسی، بدون نیاز به کتابخانه‌ی خارجی."""
+    g_days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    j_days_in_month = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29]
+    gy2 = gy - 1600
+    gm2 = gm - 1
+    gd2 = gd - 1
+    g_day_no = 365 * gy2 + (gy2 + 3) // 4 - (gy2 + 99) // 100 + (gy2 + 399) // 400
+    for i in range(gm2):
+        g_day_no += g_days_in_month[i]
+    if gm2 > 1 and ((gy % 4 == 0 and gy % 100 != 0) or (gy % 400 == 0)):
+        g_day_no += 1
+    g_day_no += gd2
+    j_day_no = g_day_no - 79
+    j_np = j_day_no // 12053
+    j_day_no %= 12053
+    jy = 979 + 33 * j_np + 4 * (j_day_no // 1461)
+    j_day_no %= 1461
+    if j_day_no >= 366:
+        jy += (j_day_no - 1) // 365
+        j_day_no = (j_day_no - 1) % 365
+    jm, jd = 12, j_day_no - 348
+    for i in range(11):
+        if j_day_no < j_days_in_month[i]:
+            jm, jd = i + 1, j_day_no + 1
+            break
+        j_day_no -= j_days_in_month[i]
+    return jy, jm, jd
 
 
 def get_user(uid: int):
@@ -329,7 +445,7 @@ async def safe_edit(query, text, reply_markup=None, parse_mode=None):
 
 
 def cancel_kb():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🚫 لغو عملیات", callback_data="cancel_conv")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🚫 لغو عملیات", callback_data="cancel_conv", style="danger")]])
 
 
 def is_maintenance() -> bool:
@@ -391,10 +507,38 @@ async def notify_owners(context: ContextTypes.DEFAULT_TYPE, text: str, parse_mod
             pass
 
 
+async def send_sticker_safe(context: ContextTypes.DEFAULT_TYPE, chat_id: int, key: str):
+    """اگه برای این رویداد استیکر تنظیم شده باشه (تو دیکشنری STICKERS بالای فایل)، می‌فرستدش.
+    اگه خالی باشه یا ارسالش خطا بده، بی‌سروصدا رد میشه تا جلوی کارِ اصلی بات رو نگیره."""
+    file_id = STICKERS.get(key)
+    if not file_id:
+        return
+    try:
+        await context.bot.send_sticker(chat_id, file_id)
+    except Exception as e:
+        logger.warning("sticker send failed (%s -> %s): %s", key, chat_id, e)
+
+
+async def sticker_id_grabber(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """فقط برای مالک/ادمین: هر استیکری که برای بات بفرستی، file_id شو برات برمی‌گردونه
+    تا تو دیکشنری STICKERS بالای فایل جایگزینش کنی."""
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        return
+    sticker = update.message.sticker
+    if not sticker:
+        return
+    await update.message.reply_text(
+        f"🆔 file_id این استیکر:\n`{sticker.file_id}`\n\n"
+        f"این رو کپی کن و تو دیکشنری STICKERS بالای فایل جایگزین کن.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
 # ==================== عضویت اجباری در کانال ====================
 def join_channel_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 عضویت در کانال", url=REQUIRED_CHANNEL_URL)],
+        [InlineKeyboardButton("📢 عضویت در کانال", url=REQUIRED_CHANNEL_URL, style="primary")],
         [InlineKeyboardButton("✅ عضو شدم", callback_data="check_join", style="success")],
     ])
 
@@ -471,9 +615,12 @@ async def check_join_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main_menu():
     keyboard = [
         [InlineKeyboardButton("💥 خرید کانفیگ", callback_data="buy_config", style="success")],
+        [InlineKeyboardButton("⚡️ خرید اتوماتیک", callback_data="auto_buy_menu", style="success")],
+        [InlineKeyboardButton("🧪 تست رایگان", callback_data="free_test_entry", style="success")],
         [InlineKeyboardButton("💳 شارژ کیف پول", callback_data="charge_wallet", style="primary"),
          InlineKeyboardButton("💰 اعتبار کیف پول", callback_data="wallet", style="primary")],
         [InlineKeyboardButton("🎉 دعوت دوستان", callback_data="invite", style="primary")],
+        [InlineKeyboardButton("🧾 حساب کاربری", callback_data="account_info", style="primary")],
         [InlineKeyboardButton("💬 پشتیبانی", callback_data="support_entry", style="primary")],
         [InlineKeyboardButton("❓ راهنما", callback_data="help", style="danger")],
     ]
@@ -482,18 +629,20 @@ def main_menu():
 
 def admin_menu():
     keyboard = [
-        [InlineKeyboardButton("📦 مدیریت حجم و کانفیگ‌ها", callback_data="admin_orders_menu")],
-        [InlineKeyboardButton("👤 مدیریت کاربران", callback_data="admin_users")],
-        [InlineKeyboardButton("💳 درخواست‌های شارژ", callback_data="admin_deposits")],
-        [InlineKeyboardButton("💬 صندوق پشتیبانی", callback_data="admin_support_inbox")],
-        [InlineKeyboardButton("📨 ارسال پیام به کاربر", callback_data="admin_send_msg_entry")],
-        [InlineKeyboardButton("📢 ارسال همگانی", callback_data="admin_broadcast_entry")],
-        [InlineKeyboardButton("📊 آمار کلی", callback_data="admin_stats")],
-        [InlineKeyboardButton("💾 بکاپ دیتابیس", callback_data="admin_backup")],
-        [InlineKeyboardButton("🛡 مدیریت ادمین‌ها", callback_data="admin_manage_admins")],
-        [InlineKeyboardButton("🗑 پاک‌سازی داده‌ها", callback_data="admin_wipe_menu")],
-        [InlineKeyboardButton("⚙️ تنظیمات بات", callback_data="admin_settings")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
+        [InlineKeyboardButton("📦 مدیریت حجم و کانفیگ‌ها", callback_data="admin_orders_menu", style="primary")],
+        [InlineKeyboardButton("⚡️ کانفیگ‌های اتوماتیک", callback_data="admin_auto_menu", style="primary")],
+        [InlineKeyboardButton("🧪 کانفیگ‌های تست رایگان", callback_data="admin_test_menu", style="success")],
+        [InlineKeyboardButton("👤 مدیریت کاربران", callback_data="admin_users", style="primary")],
+        [InlineKeyboardButton("💳 درخواست‌های شارژ", callback_data="admin_deposits", style="primary")],
+        [InlineKeyboardButton("💬 صندوق پشتیبانی", callback_data="admin_support_inbox", style="primary")],
+        [InlineKeyboardButton("📨 ارسال پیام به کاربر", callback_data="admin_send_msg_entry", style="primary")],
+        [InlineKeyboardButton("📢 ارسال همگانی", callback_data="admin_broadcast_entry", style="primary")],
+        [InlineKeyboardButton("📊 آمار کلی", callback_data="admin_stats", style="primary")],
+        [InlineKeyboardButton("💾 بکاپ دیتابیس", callback_data="admin_backup", style="primary")],
+        [InlineKeyboardButton("🛡 مدیریت ادمین‌ها", callback_data="admin_manage_admins", style="primary")],
+        [InlineKeyboardButton("🗑 پاک‌سازی داده‌ها", callback_data="admin_wipe_menu", style="danger")],
+        [InlineKeyboardButton("⚙️ تنظیمات بات", callback_data="admin_settings", style="primary")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -517,16 +666,16 @@ def profile_text(user) -> str:
 def profile_kb(user):
     uid = user["id"]
     ban_btn = (
-        InlineKeyboardButton("✅ رفع مسدودیت", callback_data=f"act_unban_{uid}")
+        InlineKeyboardButton("✅ رفع مسدودیت", callback_data=f"act_unban_{uid}", style="success")
         if user["is_banned"]
-        else InlineKeyboardButton("⛔ مسدود کردن", callback_data=f"act_ban_{uid}")
+        else InlineKeyboardButton("⛔ مسدود کردن", callback_data=f"act_ban_{uid}", style="danger")
     )
     keyboard = [
-        [InlineKeyboardButton("➕ افزایش موجودی", callback_data=f"act_addcoin_{uid}"),
-         InlineKeyboardButton("➖ کاهش موجودی", callback_data=f"act_subcoin_{uid}")],
-        [InlineKeyboardButton("📨 ارسال پیام", callback_data=f"admin_send_to_{uid}")],
+        [InlineKeyboardButton("➕ افزایش موجودی", callback_data=f"act_addcoin_{uid}", style="success"),
+         InlineKeyboardButton("➖ کاهش موجودی", callback_data=f"act_subcoin_{uid}", style="danger")],
+        [InlineKeyboardButton("📨 ارسال پیام", callback_data=f"admin_send_to_{uid}", style="primary")],
         [ban_btn],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_users")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_users", style="primary")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -604,35 +753,56 @@ async def do_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         welcome = get_setting("welcome_msg", f"🌟 به {BOT_NAME} خوش آمدی!")
-        await send(f"{welcome}", reply_markup=main_menu())
+        welcome_text = (
+            f"✨ {welcome}\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🎁 هدیه‌ی عضویتت فعال شد!\n"
+            f"👇 از دکمه‌های زیر شروع کن:"
+        )
+        await send_sticker_safe(context, chat_id, "welcome")
+        await send(welcome_text, reply_markup=main_menu())
     else:
         if existing["is_banned"]:
             await send("⛔ شما مسدود هستید.\nبرای اعتراض از بخش پشتیبانی استفاده کنید.")
             return
         db_run("UPDATE users SET first_name=?, username=? WHERE id=?",
                (user.first_name, user.username, uid))
-        await send(f"🔄 خوش برگشتی، {user.first_name}!", reply_markup=main_menu())
+        await send(
+            f"🔄 خوش برگشتی، {md_escape(user.first_name)} 👋\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"یکی از گزینه‌های زیر رو انتخاب کن:",
+            reply_markup=main_menu(),
+        )
 
 
 async def back_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await safe_edit(query, f"🏠 {BOT_NAME}\n\nیکی از گزینه‌ها رو انتخاب کن:", reply_markup=main_menu())
+    await safe_edit(
+        query,
+        f"🏠 *{BOT_NAME}*\n━━━━━━━━━━━━━━\n✨ یکی از گزینه‌ها رو انتخاب کن:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu(),
+    )
 
 
 async def help_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "❓ *راهنما*\n"
+        "❓ *راهنمای استفاده*\n"
         "━━━━━━━━━━━━━━\n"
-        " از «خرید کانفیگ» حجم دلخواهت رو انتخاب و پرداخت کن\n"
-        "💳 از «شارژ کیف پول» حساب خودت رو شارژ کن\n"
-        "💰موجودی و تاریخچه در «اعتبار کیف پول»\n"
+        "💥 از «خرید کانفیگ» حجم دلخواهت رو انتخاب و پرداخت کن\n\n"
+        "⚡️ از «خرید اتوماتیک» یکی از پکیج‌های آماده رو بگیر و آنی تحویل بگیر\n\n"
+        "🧪 از «تست رایگان» یه کانفیگ تست، فقط یک‌بار و رایگان بگیر\n\n"
+        "💳 از «شارژ کیف پول» حساب خودت رو شارژ کن\n\n"
+        "💰 موجودی و تاریخچه در «اعتبار کیف پول»\n\n"
+        "🧾 اطلاعات کامل حسابت در «حساب کاربری»\n\n"
         "🎉 با «دعوت دوستان» به ازای هر معرفی جایزه بگیر\n"
+        "━━━━━━━━━━━━━━\n"
         f"💬 سوال داشتی به پشتیبانی پیام بده: @{get_support_username()}"
     )
-    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]]
+    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")]]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -658,16 +828,68 @@ async def invite_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"🎉 *دعوت دوستان*\n━━━━━━━━━━━━━━\n"
         f"{bonus_line}"
-        f"🔗 لینک اختصاصی تو:\n{link}\n\n"
-        f"👥 تعداد دعوت‌شده‌ها: {referred}"
+        f"🔗 لینک اختصاصی تو:\n`{link}`\n\n"
+        f"👥 تعداد دعوت‌شده‌ها: *{referred}*"
     )
 
     kb = [
-        [InlineKeyboardButton("📤 اشتراک‌گذاری لینک", switch_inline_query="بیا با لینک من عضو شو!")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
+        [InlineKeyboardButton("📤 اشتراک‌گذاری لینک", switch_inline_query="بیا با لینک من عضو شو!", style="success")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")]
     ]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
-    
+
+
+async def account_info_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """کارت اطلاعات حساب کاربری، به سبک پنل SONIC."""
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    user = get_user(uid)
+
+    referred = db_one("SELECT COUNT(*) c FROM users WHERE refered_by=?", (uid,))["c"]
+
+    now = datetime.now()
+    jy, jm, jd = gregorian_to_jalali(now.year, now.month, now.day)
+    jalali_today = f"{jy}/{jm:02d}/{jd:02d}"
+    weekday_fa = PERSIAN_WEEKDAYS[now.weekday()]
+    time_str = now.strftime("%H:%M")
+
+    try:
+        gy, gm, gd = (int(x) for x in user["join_date"][:10].split("-"))
+        jjy, jjm, jjd = gregorian_to_jalali(gy, gm, gd)
+        join_jalali = f"{jjy}/{jjm:02d}/{jjd:02d}"
+    except Exception:
+        join_jalali = user["join_date"] or "-"
+
+    text = (
+        f"🧾 *حساب کاربری*\n━━━━━━━━━━━━━━\n"
+        f"🆔 آیدی عددیت : `{uid}`\n"
+        f"👤 اسمت : {md_escape(user['first_name'])}\n\n"
+        f"💰 موجودی حسابت : *{fmt_money(user['balance'])}* تومان\n\n"
+        f"🌱 تعداد زیرمجموعه هات : *{referred}*"
+    )
+
+    kb = [
+        [InlineKeyboardButton(str(uid), callback_data="noop", style="primary"),
+         InlineKeyboardButton("شناسه کاربری 🆔", callback_data="noop", style="primary")],
+        [InlineKeyboardButton(join_jalali, callback_data="noop", style="primary"),
+         InlineKeyboardButton("تاریخ عضویت ⏱", callback_data="noop", style="primary")],
+        [InlineKeyboardButton(fmt_money(user['balance']), callback_data="noop", style="primary"),
+         InlineKeyboardButton("موجودی (تومان) 💳", callback_data="noop", style="primary")],
+        [InlineKeyboardButton(str(referred), callback_data="noop", style="primary"),
+         InlineKeyboardButton("تعداد زیرمجموعه 🌱", callback_data="noop", style="primary")],
+        [InlineKeyboardButton(f"⏱ {jalali_today}", callback_data="noop", style="primary"),
+         InlineKeyboardButton(f"📅 {weekday_fa}", callback_data="noop", style="primary"),
+         InlineKeyboardButton(f"🕒 {time_str}", callback_data="noop", style="primary")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
+    ]
+    await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def noop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دکمه‌های صرفاً نمایشی (بدون عملکرد) تو کارت حساب کاربری."""
+    await update.callback_query.answer()
+
 
 # ==================== کیف پول ====================
 async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -677,14 +899,14 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(uid)
     text = (
         f"💰 *اعتبار کیف پول*\n━━━━━━━━━━━━━━\n"
-        f"موجودی فعلی: {fmt_money(user['balance'])} تومان\n"
-        f"کانفیگ‌های خریداری‌شده: {user['used_configs']}\n"
-        f"مجموع خرید: {fmt_money(user['total_spent'])} تومان"
+        f"💳 موجودی فعلی: *{fmt_money(user['balance'])}* تومان\n"
+        f"📦 کانفیگ‌های خریداری‌شده: *{user['used_configs']}*\n"
+        f"🧮 مجموع خرید: *{fmt_money(user['total_spent'])}* تومان"
     )
     kb = [
-        [InlineKeyboardButton("💳شارژ کیف پول", callback_data="charge_wallet")],
-        [InlineKeyboardButton("📜 تاریخچه تراکنش‌ها", callback_data="tx_history")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
+        [InlineKeyboardButton("💳شارژ کیف پول", callback_data="charge_wallet", style="primary")],
+        [InlineKeyboardButton("📜 تاریخچه تراکنش‌ها", callback_data="tx_history", style="primary")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
     ]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -703,7 +925,7 @@ async def tx_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             date = datetime.fromtimestamp(r["date"]).strftime("%m-%d %H:%M")
             lines.append(f"{date} | {sign}{fmt_money(r['amount'])} | {md_escape(r['description'])}")
         text = "\n".join(lines)
-    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="wallet")]]
+    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="wallet", style="primary")]]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -712,14 +934,14 @@ def charge_amount_kb():
     keyboard = []
     row = []
     for amt in CHARGE_PRESETS:
-        row.append(InlineKeyboardButton(f"{fmt_money(amt)} تومان", callback_data=f"charge_amt_{amt}"))
+        row.append(InlineKeyboardButton(f"{fmt_money(amt)} تومان", callback_data=f"charge_amt_{amt}", style="primary"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("✏️ مبلغ دلخواه", callback_data="charge_custom")])
-    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="wallet")])
+    keyboard.append([InlineKeyboardButton("✏️ مبلغ دلخواه", callback_data="charge_custom", style="primary")])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="wallet", style="primary")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -747,8 +969,8 @@ async def show_charge_payment(chat_send, amount: int, context: ContextTypes.DEFA
         "بعد از واریز، روی «ارسال فیش» بزن و عکس، گیف یا متن فیش واریزی رو بفرست."
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📤 ارسال فیش", callback_data="charge_send_receipt")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="charge_wallet")],
+        [InlineKeyboardButton("📤 ارسال فیش", callback_data="charge_send_receipt", style="primary")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="charge_wallet", style="primary")],
     ])
     if edit_query is not None:
         await safe_edit(edit_query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
@@ -832,8 +1054,8 @@ async def receive_charge_receipt(update: Update, context: ContextTypes.DEFAULT_T
                 f"📎 نوع فیش: {receipt_type}"
             )
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ تایید", callback_data=f"dep_approve_{dep_id}"),
-                 InlineKeyboardButton("❌ رد", callback_data=f"dep_reject_{dep_id}")],
+                [InlineKeyboardButton("✅ تایید", callback_data=f"dep_approve_{dep_id}", style="success"),
+                 InlineKeyboardButton("❌ رد", callback_data=f"dep_reject_{dep_id}", style="danger")],
             ])
             await notify_admins(context, info, reply_markup=kb)
             admin_notified = True
@@ -885,6 +1107,7 @@ async def dep_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer("✅ تایید شد")
     try:
+        await send_sticker_safe(context, dep["user_id"], "deposit_approved")
         await context.bot.send_message(
             dep["user_id"],
             f"✅ شارژ کیف پول شما تایید شد!\n💰 مبلغ {fmt_money(dep['amount'])} تومان به کیف پولت اضافه شد.",
@@ -955,10 +1178,10 @@ async def admin_deposits_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = md_escape(u["first_name"] or "ناشناس") if u else "حذف‌شده"
         text += f"#{r['id']} | {name} | {fmt_money(r['amount'])} تومان\n"
         kb.append([
-            InlineKeyboardButton(f"✅ تایید #{r['id']}", callback_data=f"dep_approve_{r['id']}"),
-            InlineKeyboardButton(f"❌ رد #{r['id']}", callback_data=f"dep_reject_{r['id']}"),
+            InlineKeyboardButton(f"✅ تایید #{r['id']}", callback_data=f"dep_approve_{r['id']}", style="success"),
+            InlineKeyboardButton(f"❌ رد #{r['id']}", callback_data=f"dep_reject_{r['id']}", style="danger"),
         ])
-    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")])
+    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")])
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -1005,8 +1228,8 @@ async def receive_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "آیا خرید رو تایید می‌کنی؟"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تایید خرید", callback_data="cfg_confirm")],
-        [InlineKeyboardButton("❌ انصراف", callback_data="cfg_cancel")],
+        [InlineKeyboardButton("✅ تایید خرید", callback_data="cfg_confirm", style="success")],
+        [InlineKeyboardButton("❌ انصراف", callback_data="cfg_cancel", style="danger")],
     ])
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
     return ConversationHandler.END
@@ -1038,8 +1261,8 @@ async def cfg_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             query,
             f"❌ موجودی کافی نداری!\nلازم: {fmt_money(price)} تومان\nموجودی تو: {fmt_money(user['balance'])} تومان",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 شارژ کیف پول", callback_data="charge_wallet")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
+                [InlineKeyboardButton("💳 شارژ کیف پول", callback_data="charge_wallet", style="primary")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
             ])
         )
         return
@@ -1069,7 +1292,7 @@ async def cfg_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if get_setting("purchase_notify") == "1":
         try:
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("📤 ارسال کانفیگ", callback_data=f"sendcfg_order_{order_id}")
+                InlineKeyboardButton("📤 ارسال کانفیگ", callback_data=f"sendcfg_order_{order_id}", style="primary")
             ]])
             await notify_admins(
                 context,
@@ -1127,6 +1350,7 @@ async def receive_admin_send_cfg(update: Update, context: ContextTypes.DEFAULT_T
         )
         db_run("UPDATE config_orders SET status='delivered', delivered_at=? WHERE id=?", (time.time(), order_id))
         db_run("UPDATE users SET used_configs=used_configs+1 WHERE id=?", (target_uid,))
+        await send_sticker_safe(context, target_uid, "purchase_success")
         await update.message.reply_text(
             f"✅ کانفیگ برای خریدار `{target_uid}` (سفارش #{order_id}) ارسال شد.",
             parse_mode=ParseMode.MARKDOWN,
@@ -1155,9 +1379,9 @@ async def admin_orders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📥 سفارش‌های در انتظار ارسال: {pending_count}"
     )
     kb = [
-        [InlineKeyboardButton("💎 تغییر قیمت هر گیگ", callback_data="admin_set_price")],
-        [InlineKeyboardButton("📥 سفارش‌های در انتظار", callback_data="admin_pending_orders")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")],
+        [InlineKeyboardButton("💎 تغییر قیمت هر گیگ", callback_data="admin_set_price", style="primary")],
+        [InlineKeyboardButton("📥 سفارش‌های در انتظار", callback_data="admin_pending_orders", style="primary")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")],
     ]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -1177,8 +1401,8 @@ async def admin_pending_orders_cb(update: Update, context: ContextTypes.DEFAULT_
         u = get_user(r["user_id"])
         name = md_escape(u["first_name"] or "ناشناس") if u else "حذف‌شده"
         text += f"#{r['id']} | {name} | {fmt_volume(r['volume_gb'])} گیگ | {fmt_money(r['price'])} تومان\n"
-        kb.append([InlineKeyboardButton(f"📤 ارسال کانفیگ #{r['id']}", callback_data=f"sendcfg_order_{r['id']}")])
-    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_orders_menu")])
+        kb.append([InlineKeyboardButton(f"📤 ارسال کانفیگ #{r['id']}", callback_data=f"sendcfg_order_{r['id']}", style="primary")])
+    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_orders_menu", style="primary")])
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -1205,6 +1429,472 @@ async def receive_price_per_gb(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 
+# ==================== خرید اتوماتیک (حجم‌های ثابت، تحویل فوری) ====================
+def auto_available_count(gb: int) -> int:
+    return db_one(
+        "SELECT COUNT(*) c FROM auto_configs WHERE package_gb=? AND status='available'", (gb,)
+    )["c"]
+
+
+def auto_buy_menu_kb():
+    keyboard = []
+    for gb, price in AUTO_PACKAGES.items():
+        left = auto_available_count(gb)
+        label = f"⚡️ {gb} گیگ | {fmt_money(price)} تومان"
+        if left == 0:
+            label += " (ناموجود)"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"auto_pkg_{gb}", style="primary")])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def auto_buy_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    text = (
+        "⚡️ *خرید اتوماتیک*\n"
+        "━━━━━━━━━━━━━━\n"
+        "کانفیگ‌های آماده با حجم مشخص، بلافاصله بعد از تایید پرداخت برات ارسال میشه:\n\n"
+        "یکی از پکیج‌ها رو انتخاب کن:"
+    )
+    await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=auto_buy_menu_kb())
+
+
+async def auto_pkg_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    gb = int(context.match.group(1))
+    price = AUTO_PACKAGES.get(gb)
+    if price is None:
+        await query.answer("❌ پکیج نامعتبره.", show_alert=True)
+        return
+
+    left = auto_available_count(gb)
+    if left == 0:
+        await query.answer("❌ فعلاً کانفیگی برای این پکیج موجود نیست.", show_alert=True)
+        return
+
+    uid = query.from_user.id
+    user = get_user(uid)
+    await query.answer()
+
+    if user["balance"] < price:
+        await safe_edit(
+            query,
+            f"❌ موجودی کافی نداری!\nقیمت پکیج: {fmt_money(price)} تومان\nموجودی تو: {fmt_money(user['balance'])} تومان",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 شارژ کیف پول", callback_data="charge_wallet", style="primary")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="auto_buy_menu", style="primary")],
+            ])
+        )
+        return
+
+    text = (
+        "🧾 *تایید خرید اتوماتیک*\n━━━━━━━━━━━━━━\n"
+        f"📦 حجم: {gb} گیگابایت\n"
+        f"💰 قیمت: {fmt_money(price)} تومان\n\n"
+        "بعد از تایید، کانفیگ بلافاصله برات ارسال میشه.\nآیا خرید رو تایید می‌کنی؟"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ تایید و دریافت آنی", callback_data=f"auto_confirm_{gb}", style="success")],
+        [InlineKeyboardButton("❌ انصراف", callback_data="auto_buy_menu", style="danger")],
+    ])
+    await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+
+
+async def auto_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    gb = int(context.match.group(1))
+    price = AUTO_PACKAGES.get(gb)
+    if price is None:
+        await query.answer("❌ پکیج نامعتبره.", show_alert=True)
+        return
+
+    uid = query.from_user.id
+    user = get_user(uid)
+    if user["balance"] < price:
+        await query.answer("❌ موجودی کافی نیست!", show_alert=True)
+        return
+
+    # گرفتن یکی از کانفیگ‌های موجودِ همین پکیج (اولین ردیفِ آماده)
+    row = db_one(
+        "SELECT id, source_chat_id, source_message_id FROM auto_configs "
+        "WHERE package_gb=? AND status='available' ORDER BY id LIMIT 1",
+        (gb,)
+    )
+    if not row:
+        await query.answer("❌ همین الان تموم شد! یکی دیگه رو امتحان کن.", show_alert=True)
+        await auto_buy_menu_cb(update, context)
+        return
+
+    cfg_id = row["id"]
+    # رزرو اتمیک: فقط اگه هنوز 'available' بود آپدیت انجام میشه؛ اگه یه ریکوئست دیگه زودتر برده باشتش، rowcount صفر میشه
+    cur = db_run(
+        "UPDATE auto_configs SET status='delivered', delivered_to=?, delivered_at=? "
+        "WHERE id=? AND status='available'",
+        (uid, time.time(), cfg_id)
+    )
+    if cur.rowcount == 0:
+        await query.answer("❌ یکی دیگه سریع‌تر بود! دوباره امتحان کن.", show_alert=True)
+        await auto_buy_menu_cb(update, context)
+        return
+
+    # کسر از کیف پول و ثبت تراکنش
+    db_run("UPDATE users SET balance=balance-?, total_spent=total_spent+?, used_configs=used_configs+1 WHERE id=?",
+           (price, price, uid))
+    log_tx(uid, "auto_purchase", -price, f"خرید اتوماتیک {gb} گیگ (کانفیگ #{cfg_id})")
+
+    await query.answer("✅ در حال ارسال...")
+    try:
+        await context.bot.copy_message(
+            chat_id=uid,
+            from_chat_id=row["source_chat_id"],
+            message_id=row["source_message_id"],
+        )
+        await send_sticker_safe(context, uid, "purchase_success")
+        await safe_edit(
+            query,
+            f"✅ *خرید موفق بود!*\n\n📦 {gb} گیگابایت با موفقیت ارسال شد.\nاز خریدت ممنونیم 🌟",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        logger.error("auto config delivery failed for %s: %s", uid, e)
+        # اگه ارسال شکست خورد، پول برگرده و کانفیگ به حالت اولش برگرده که هدر نره
+        db_run("UPDATE users SET balance=balance+?, total_spent=total_spent-?, used_configs=used_configs-1 WHERE id=?",
+               (price, price, uid))
+        db_run("UPDATE auto_configs SET status='available', delivered_to=NULL, delivered_at=NULL WHERE id=?", (cfg_id,))
+        log_tx(uid, "auto_purchase_refund", price, f"برگشت وجه خرید اتوماتیک (کانفیگ #{cfg_id})")
+        await safe_edit(
+            query,
+            "❌ متاسفانه در ارسال کانفیگ مشکلی پیش اومد و مبلغ به کیف پولت برگشت.\nبا پشتیبانی تماس بگیر.",
+            reply_markup=main_menu()
+        )
+        return
+
+    if get_setting("purchase_notify") == "1":
+        try:
+            await notify_admins(
+                context,
+                f"⚡️ *خرید اتوماتیک*\n━━━━━━━━━━━━━━\n"
+                f"👤 {md_escape(user['first_name'] or 'ناشناس')} (`{uid}`)\n"
+                f"📦 حجم: {gb} گیگابایت\n"
+                f"💰 {fmt_money(price)} تومان\n"
+                f"🆔 کانفیگ #{cfg_id} تحویل داده شد."
+            )
+        except Exception:
+            pass
+
+
+async def auto_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("لغو شد")
+    await safe_edit(query, "🚫 خرید لغو شد.", reply_markup=main_menu())
+
+
+# ---- مدیریت کانفیگ‌های اتوماتیک (ادمین) ----
+def admin_auto_menu_kb():
+    keyboard = []
+    for gb in AUTO_PACKAGES:
+        left = auto_available_count(gb)
+        keyboard.append([InlineKeyboardButton(
+            f"➕ افزودن کانفیگ به {gb} گیگ (موجود: {left})", callback_data=f"auto_add_pkg_{gb}", style="success")])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def admin_auto_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    lines = ["⚡️ *مدیریت کانفیگ‌های اتوماتیک*", "━━━━━━━━━━━━━━"]
+    for gb, price in AUTO_PACKAGES.items():
+        left = auto_available_count(gb)
+        lines.append(f"📦 {gb} گیگ | {fmt_money(price)} تومان | موجودی: {left}")
+    lines.append("\nهر کانفیگ فقط یک‌بار برای یک مشتری ارسال میشه و بعدش خودکار از لیست حذف میشه.")
+    await safe_edit(query, "\n".join(lines), parse_mode=ParseMode.MARKDOWN, reply_markup=admin_auto_menu_kb())
+
+
+async def admin_auto_add_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    gb = int(context.match.group(1))
+    context.user_data["auto_add_pkg"] = gb
+    left = auto_available_count(gb)
+    await safe_edit(
+        query,
+        f"📦 افزودن کانفیگ به پکیج *{gb} گیگ* (فعلاً {left} تا موجوده)\n\n"
+        "کانفیگ رو بفرست (متن، عکس یا فایل). می‌تونی پشت‌سرهم چندتا بفرستی، هرکدوم فقط برای یک نفر ارسال میشه.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=cancel_kb()
+    )
+    return ADMIN_AUTO_ADD_CFG
+
+
+async def receive_auto_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    gb = context.user_data.get("auto_add_pkg")
+    if not gb:
+        await update.message.reply_text("❌ پکیج مشخص نیست، دوباره از منو شروع کن.", reply_markup=admin_menu())
+        return ConversationHandler.END
+
+    db_run(
+        "INSERT INTO auto_configs (package_gb, source_chat_id, source_message_id, status, added_by, added_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (gb, update.effective_chat.id, update.message.message_id, "available",
+         update.effective_user.id, time.time())
+    )
+    left = auto_available_count(gb)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ افزودن کانفیگ بعدی", callback_data="auto_add_more", style="success")],
+        [InlineKeyboardButton("✅ پایان", callback_data="auto_add_finish", style="success")],
+    ])
+    await update.message.reply_text(
+        f"✅ کانفیگ اضافه شد. موجودی فعلی پکیج {gb} گیگ: {left} تا.\n\nمی‌خوای یکی دیگه اضافه کنی؟",
+        reply_markup=kb
+    )
+    return ADMIN_AUTO_ADD_CFG
+
+
+async def auto_add_more_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    gb = context.user_data.get("auto_add_pkg")
+    if not gb:
+        await query.message.reply_text("❌ پکیج مشخص نیست، دوباره از منو شروع کن.", reply_markup=admin_menu())
+        return ConversationHandler.END
+    await query.message.reply_text(
+        f"📦 کانفیگ بعدی برای پکیج {gb} گیگ رو بفرست:",
+        reply_markup=cancel_kb()
+    )
+    return ADMIN_AUTO_ADD_CFG
+
+
+async def auto_add_finish_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("تمام شد ✅")
+    context.user_data.pop("auto_add_pkg", None)
+    await query.message.reply_text("✅ افزودن کانفیگ‌ها تموم شد.", reply_markup=admin_menu())
+    return ConversationHandler.END
+
+
+# ==================== تست رایگان (هر کاربر فقط یک‌بار؛ هر کانفیگ تا ۳ نفر) ====================
+def test_available_count() -> int:
+    """تعداد کانفیگ‌های تست فعالی که هنوز ظرفیت تحویل دارن (برای نمایش به ادمین)."""
+    return db_one(
+        "SELECT COUNT(*) c FROM test_configs WHERE status='active' AND delivered_count<?",
+        (TEST_CONFIG_MAX_DELIVERIES,)
+    )["c"]
+
+
+def has_used_test(uid: int) -> bool:
+    return db_one("SELECT 1 FROM test_deliveries WHERE user_id=?", (uid,)) is not None
+
+
+async def free_test_entry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+
+    if has_used_test(uid):
+        await safe_edit(
+            query,
+            "🧪 *تست رایگان*\n━━━━━━━━━━━━━━\n"
+            "❌ تو قبلاً یک‌بار از تست رایگان استفاده کردی.\n"
+            "هر کاربر فقط یک‌بار می‌تونه کانفیگ تست بگیره.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💥 خرید کانفیگ", callback_data="buy_config", style="success")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
+            ])
+        )
+        return
+
+    left = test_available_count()
+    text = (
+        "🧪 *تست رایگان*\n━━━━━━━━━━━━━━\n"
+        "یه کانفیگ تست، کاملاً رایگان و فقط یک‌بار بگیر و کیفیت سرویس رو امتحان کن!\n\n"
+        f"📦 وضعیت موجودی: {'✅ موجود' if left > 0 else '❌ فعلاً ناموجود'}"
+    )
+    kb = [
+        [InlineKeyboardButton("🎁 دریافت کانفیگ تست", callback_data="free_test_claim", style="success")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
+    ]
+    await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def free_test_claim_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid = query.from_user.id
+
+    if has_used_test(uid):
+        await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
+        return
+
+    await query.answer("⏳ در حال بررسی...")
+
+    # ممکنه چند کانفیگ تست هم‌زمان فعال باشن؛ همیشه از قدیمی‌ترینِ ناتموم استفاده می‌کنیم
+    # تا نفر دوم و سوم هم دقیقاً همون کانفیگِ نفر اول رو بگیرن، نه یه کانفیگ جدا.
+    claimed_row = None
+    for _ in range(5):
+        row = db_one(
+            "SELECT id, source_chat_id, source_message_id FROM test_configs "
+            "WHERE status='active' AND delivered_count<? ORDER BY id LIMIT 1",
+            (TEST_CONFIG_MAX_DELIVERIES,)
+        )
+        if not row:
+            break
+        cfg_id = row["id"]
+        # رزرو اتمیک یک "جایگاه" از همین کانفیگ (فقط اگه هنوز زیر سقف ۳ نفر بود)
+        cur = db_run(
+            "UPDATE test_configs SET delivered_count=delivered_count+1 "
+            "WHERE id=? AND status='active' AND delivered_count<?",
+            (cfg_id, TEST_CONFIG_MAX_DELIVERIES)
+        )
+        if cur.rowcount == 0:
+            continue  # یکی دیگه هم‌زمان همین آخرین جا رو برد؛ برو سراغ کانفیگ بعدی
+        claimed_row = row
+        break
+
+    if not claimed_row:
+        await safe_edit(
+            query,
+            "😔 فعلاً کانفیگ تستی موجود نیست.\nبعداً دوباره امتحان کن یا از «خرید کانفیگ» استفاده کن.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💥 خرید کانفیگ", callback_data="buy_config", style="success")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
+            ])
+        )
+        return
+
+    cfg_id = claimed_row["id"]
+
+    # ثبت تحویل برای این کاربر؛ UNIQUE(user_id) جلوی گرفتن تست دوم رو حتی موقع رقابت هم‌زمان می‌گیره
+    try:
+        db_run(
+            "INSERT INTO test_deliveries (user_id, test_config_id, delivered_at) VALUES (?,?,?)",
+            (uid, cfg_id, time.time())
+        )
+    except sqlite3.IntegrityError:
+        # کاربر هم‌زمان از یه جای دیگه تست گرفته؛ جایگاهی که رزرو کردیم رو برگردون
+        db_run("UPDATE test_configs SET delivered_count=delivered_count-1 WHERE id=?", (cfg_id,))
+        await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
+        return
+
+    # اگه با همین تحویل به سقف ۳ نفر رسید، کانفیگ رو کامل حذف کن
+    updated = db_one("SELECT delivered_count FROM test_configs WHERE id=?", (cfg_id,))
+    if updated and updated["delivered_count"] >= TEST_CONFIG_MAX_DELIVERIES:
+        db_run("DELETE FROM test_configs WHERE id=?", (cfg_id,))
+
+    try:
+        await context.bot.copy_message(
+            chat_id=uid,
+            from_chat_id=claimed_row["source_chat_id"],
+            message_id=claimed_row["source_message_id"],
+        )
+        await safe_edit(
+            query,
+            "✅ *کانفیگ تست ارسال شد!*\n\nامیدواریم از کیفیت سرویس راضی باشی 🌟\n"
+            "برای استفاده کامل می‌تونی از «خرید کانفیگ» یا «خرید اتوماتیک» استفاده کنی.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        logger.error("test config delivery failed for %s: %s", uid, e)
+        await safe_edit(
+            query,
+            "❌ در ارسال کانفیگ تست مشکلی پیش اومد. با پشتیبانی تماس بگیر.",
+            reply_markup=main_menu()
+        )
+        return
+
+    if get_setting("purchase_notify") == "1":
+        try:
+            user = get_user(uid)
+            await notify_admins(
+                context,
+                f"🧪 *تست رایگان تحویل داده شد*\n━━━━━━━━━━━━━━\n"
+                f"👤 {md_escape(user['first_name'] or 'ناشناس') if user else uid} (`{uid}`)\n"
+                f"🆔 کانفیگ تست #{cfg_id}"
+            )
+        except Exception:
+            pass
+
+
+# ---- مدیریت کانفیگ‌های تست رایگان (ادمین) ----
+async def admin_test_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    rows = db_all(
+        "SELECT id, delivered_count FROM test_configs WHERE status='active' ORDER BY id"
+    )
+    total_used = db_one("SELECT COUNT(*) c FROM test_deliveries")["c"]
+    lines = ["🧪 *مدیریت کانفیگ‌های تست رایگان*", "━━━━━━━━━━━━━━"]
+    if rows:
+        for r in rows:
+            lines.append(f"📦 کانفیگ #{r['id']} | {r['delivered_count']}/{TEST_CONFIG_MAX_DELIVERIES} نفر گرفتن")
+    else:
+        lines.append("فعلاً هیچ کانفیگ تستی در صف نیست.")
+    lines.append(f"\n👥 مجموع کاربرانی که تا الان تست گرفتن: {total_used}")
+    lines.append(f"\nℹ️ هر کانفیگ تست بین اولین {TEST_CONFIG_MAX_DELIVERIES} نفر درخواست‌کننده مشترکه، "
+                 f"بعد از رسیدن به {TEST_CONFIG_MAX_DELIVERIES} نفر خودکار حذف میشه و نوبت کانفیگ بعدی میشه.")
+    kb = [
+        [InlineKeyboardButton("➕ افزودن کانفیگ تست جدید", callback_data="admin_test_add_entry", style="success")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")],
+    ]
+    await safe_edit(query, "\n".join(lines), parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def admin_test_add_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await safe_edit(
+        query,
+        "🧪 کانفیگ تست رو بفرست (متن، عکس یا فایل).\n"
+        f"این کانفیگ بین اولین {TEST_CONFIG_MAX_DELIVERIES} نفری که «تست رایگان» بزنن مشترک میشه.\n"
+        "می‌تونی پشت‌سرهم چندتا کانفیگ تست جدا اضافه کنی:",
+        reply_markup=cancel_kb()
+    )
+    return ADMIN_TEST_ADD_CFG
+
+
+async def receive_test_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    db_run(
+        "INSERT INTO test_configs (source_chat_id, source_message_id, delivered_count, status, added_by, added_at) "
+        "VALUES (?,?,0,'active',?,?)",
+        (update.effective_chat.id, update.message.message_id, update.effective_user.id, time.time())
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ افزودن کانفیگ تست بعدی", callback_data="test_add_more", style="success")],
+        [InlineKeyboardButton("✅ پایان", callback_data="test_add_finish", style="success")],
+    ])
+    await update.message.reply_text("✅ کانفیگ تست اضافه شد.\n\nمی‌خوای یکی دیگه هم اضافه کنی؟", reply_markup=kb)
+    return ADMIN_TEST_ADD_CFG
+
+
+async def test_add_more_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("🧪 کانفیگ تست بعدی رو بفرست:", reply_markup=cancel_kb())
+    return ADMIN_TEST_ADD_CFG
+
+
+async def test_add_finish_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("تمام شد ✅")
+    await query.message.reply_text("✅ افزودن کانفیگ‌های تست تموم شد.", reply_markup=admin_menu())
+    return ConversationHandler.END
+
+
 # ==================== پشتیبانی (کاربر به ادمین) ====================
 async def support_entry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1218,9 +1908,9 @@ async def support_entry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "برای ارسال از داخل بات، روی دکمه زیر بزن:"
     )
     kb = [
-        [InlineKeyboardButton("✍️ ارسال پیام", callback_data="support_start")],
-        [InlineKeyboardButton(f"💬 پیام به @{support_username}", url=f"https://t.me/{support_username}")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
+        [InlineKeyboardButton("✍️ ارسال پیام", callback_data="support_start", style="primary")],
+        [InlineKeyboardButton(f"💬 پیام به @{support_username}", url=f"https://t.me/{support_username}", style="primary")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")]
     ]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -1245,8 +1935,8 @@ async def receive_support_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
     if get_setting("support_notify", "1") == "1":
         try:
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💬 پاسخ دادن", callback_data=f"admin_reply_sel_{uid}_{msg_id}")],
-                [InlineKeyboardButton("👤 پروفایل", callback_data=f"act_manage_{uid}")]
+                [InlineKeyboardButton("💬 پاسخ دادن", callback_data=f"admin_reply_sel_{uid}_{msg_id}", style="primary")],
+                [InlineKeyboardButton("👤 پروفایل", callback_data=f"act_manage_{uid}", style="primary")]
             ])
             await notify_admins(
                 context,
@@ -1271,6 +1961,7 @@ async def receive_support_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
 CONV_KEYS = (
     "charge_amount", "pending_volume", "pending_price", "target_uid", "coin_action",
     "send_msg_target", "reply_target_uid", "order_target_id", "order_target_uid",
+    "auto_add_pkg",
 )
 
 
@@ -1335,9 +2026,9 @@ async def admin_users_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     kb = [
-        [InlineKeyboardButton("🔍 جستجوی کاربر با آیدی", callback_data="admin_search_entry")],
-        [InlineKeyboardButton("🕒 کاربران اخیر", callback_data="admin_recent_users")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")],
+        [InlineKeyboardButton("🔍 جستجوی کاربر با آیدی", callback_data="admin_search_entry", style="primary")],
+        [InlineKeyboardButton("🕒 کاربران اخیر", callback_data="admin_recent_users", style="primary")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")],
     ]
     await safe_edit(query, "👤 مدیریت کاربران", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -1379,8 +2070,8 @@ async def recent_users_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for r in rows:
         flag = "⛔" if r["is_banned"] else "✅"
         text += f"{flag} `{r['id']}` — {md_escape(r['first_name'] or '-')} — 💰{fmt_money(r['balance'])}\n"
-        kb.append([InlineKeyboardButton(f"مدیریت {r['id']}", callback_data=f"act_manage_{r['id']}")])
-    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_users")])
+        kb.append([InlineKeyboardButton(f"مدیریت {r['id']}", callback_data=f"act_manage_{r['id']}", style="primary")])
+    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_users", style="primary")])
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -1537,7 +2228,7 @@ async def admin_support_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not rows:
         text = "📭 صندوق پشتیبانی خالیه!"
-        kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]]
+        kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")]]
         await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(kb))
         return
 
@@ -1550,9 +2241,8 @@ async def admin_support_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE
         short_msg = md_escape(r["message"][:30]) + ("..." if len(r["message"]) > 30 else "")
         text += f"{read_flag} #{r['id']} | {name} | {short_msg}\n"
         kb.append([InlineKeyboardButton(
-            f"💬 پاسخ #{r['id']}", callback_data=f"admin_reply_sel_{r['user_id']}_{r['id']}"
-        )])
-    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")])
+            f"💬 پاسخ #{r['id']}", callback_data=f"admin_reply_sel_{r['user_id']}_{r['id']}", style="primary")])
+    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")])
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -1614,8 +2304,8 @@ async def broadcast_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_bc_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["bc_text"] = update.message.text
     kb = [
-        [InlineKeyboardButton("✅ ارسال به همه", callback_data="bc_yes")],
-        [InlineKeyboardButton("🚫 لغو", callback_data="cancel_conv")],
+        [InlineKeyboardButton("✅ ارسال به همه", callback_data="bc_yes", style="success")],
+        [InlineKeyboardButton("🚫 لغو", callback_data="cancel_conv", style="danger")],
     ]
     await update.message.reply_text(
         f"پیش‌نمایش پیام:\n\n{update.message.text}\n\nارسال بشه؟",
@@ -1656,6 +2346,10 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending_dep = db_one("SELECT COUNT(*) c FROM deposits WHERE status='pending'")["c"]
     pending_orders = db_one("SELECT COUNT(*) c FROM config_orders WHERE status='pending'")["c"]
     delivered_orders = db_one("SELECT COUNT(*) c FROM config_orders WHERE status='delivered'")["c"]
+    auto_available = db_one("SELECT COUNT(*) c FROM auto_configs WHERE status='available'")["c"]
+    auto_delivered = db_one("SELECT COUNT(*) c FROM auto_configs WHERE status='delivered'")["c"]
+    test_active = db_one("SELECT COUNT(*) c FROM test_configs WHERE status='active'")["c"]
+    test_delivered = db_one("SELECT COUNT(*) c FROM test_deliveries")["c"]
     admins_count = len(admin_ids())
     text = (
         f"📊 *آمار کلی*\n━━━━━━━━━━━━━━\n"
@@ -1665,9 +2359,11 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📦 کانفیگ‌های ارسال‌شده: {delivered_orders}\n"
         f"📥 سفارش در انتظار ارسال: {pending_orders}\n"
         f"💳 درخواست شارژ در انتظار: {pending_dep}\n"
+        f"⚡️ کانفیگ اتوماتیک موجود: {auto_available} | تحویل‌شده: {auto_delivered}\n"
+        f"🧪 کانفیگ تست فعال: {test_active} | تحویل‌شده به کاربران: {test_delivered}\n"
         f"🛡 تعداد ادمین‌ها: {admins_count}"
     )
-    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]]
+    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")]]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -1710,9 +2406,9 @@ async def admin_manage_admins_cb(update: Update, context: ContextTypes.DEFAULT_T
     kb = []
     for a in added:
         lines.append(f"  • `{a['id']}`")
-        kb.append([InlineKeyboardButton(f"➖ حذف {a['id']}", callback_data=f"admin_rm_{a['id']}")])
-    kb.append([InlineKeyboardButton("➕ افزودن ادمین جدید", callback_data="admin_add_entry")])
-    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")])
+        kb.append([InlineKeyboardButton(f"➖ حذف {a['id']}", callback_data=f"admin_rm_{a['id']}", style="danger")])
+    kb.append([InlineKeyboardButton("➕ افزودن ادمین جدید", callback_data="admin_add_entry", style="success")])
+    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")])
     await safe_edit(query, "\n".join(lines), parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -1774,8 +2470,10 @@ WIPE_LABELS = {
     "tx": "تاریخچه تراکنش‌ها",
     "orders": "سفارش‌ها و درخواست‌های شارژ",
     "support": "پیام‌های پشتیبانی",
+    "auto": "کانفیگ‌های اتوماتیک باقی‌مانده",
+    "test": "کانفیگ‌های تست رایگان باقی‌مانده و تاریخچه‌ی تحویل‌ها",
     "users": "همه کاربران، کیف پول‌ها و کل تاریخچه‌شون",
-    "full": "کل دیتابیس (کاربران، تراکنش‌ها، سفارش‌ها، پیام‌ها)",
+    "full": "کل دیتابیس (کاربران، تراکنش‌ها، سفارش‌ها، پیام‌ها، کانفیگ‌های اتوماتیک و تست)",
 }
 
 
@@ -1789,12 +2487,14 @@ async def admin_wipe_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "⚠️ همه‌ی این عملیات‌ها *غیرقابل بازگشت* هستن. با دقت انتخاب کن."
     )
     kb = [
-        [InlineKeyboardButton("🧾 پاک کردن تاریخچه تراکنش‌ها", callback_data="wipe_ask_tx")],
-        [InlineKeyboardButton("📦 پاک کردن سفارش‌ها و شارژها", callback_data="wipe_ask_orders")],
-        [InlineKeyboardButton("💬 پاک کردن پیام‌های پشتیبانی", callback_data="wipe_ask_support")],
-        [InlineKeyboardButton("👥 پاک کردن همه کاربران", callback_data="wipe_ask_users")],
-        [InlineKeyboardButton("💣 ریست کامل دیتابیس", callback_data="wipe_ask_full")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")],
+        [InlineKeyboardButton("🧾 پاک کردن تاریخچه تراکنش‌ها", callback_data="wipe_ask_tx", style="danger")],
+        [InlineKeyboardButton("📦 پاک کردن سفارش‌ها و شارژها", callback_data="wipe_ask_orders", style="danger")],
+        [InlineKeyboardButton("💬 پاک کردن پیام‌های پشتیبانی", callback_data="wipe_ask_support", style="danger")],
+        [InlineKeyboardButton("⚡️ پاک کردن کانفیگ‌های اتوماتیک", callback_data="wipe_ask_auto", style="danger")],
+        [InlineKeyboardButton("🧪 پاک کردن کانفیگ‌های تست رایگان", callback_data="wipe_ask_test", style="danger")],
+        [InlineKeyboardButton("👥 پاک کردن همه کاربران", callback_data="wipe_ask_users", style="danger")],
+        [InlineKeyboardButton("💣 ریست کامل دیتابیس", callback_data="wipe_ask_full", style="danger")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")],
     ]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -1808,8 +2508,8 @@ async def wipe_ask_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     label = WIPE_LABELS.get(key, key)
     text = f"⚠️ *تایید نهایی*\n\nمطمئنی می‌خوای «{label}» رو کامل و برای همیشه پاک کنی؟\nاین کار قابل بازگشت نیست!"
     kb = [
-        [InlineKeyboardButton("✅ بله، پاک کن", callback_data=f"wipe_do_{key}"),
-         InlineKeyboardButton("🚫 نه، لغو", callback_data="admin_wipe_menu")],
+        [InlineKeyboardButton("✅ بله، پاک کن", callback_data=f"wipe_do_{key}", style="success"),
+         InlineKeyboardButton("🚫 نه، لغو", callback_data="admin_wipe_menu", style="danger")],
     ]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -1827,11 +2527,17 @@ async def wipe_do_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db_run("DELETE FROM deposits")
         elif key == "support":
             db_run("DELETE FROM support_messages")
+        elif key == "auto":
+            db_run("DELETE FROM auto_configs")
+        elif key == "test":
+            db_run("DELETE FROM test_configs")
+            db_run("DELETE FROM test_deliveries")
         elif key == "users":
             for t in ("users", "transactions", "deposits", "config_orders", "support_messages"):
                 db_run(f"DELETE FROM {t}")
         elif key == "full":
-            for t in ("users", "transactions", "deposits", "config_orders", "support_messages"):
+            for t in ("users", "transactions", "deposits", "config_orders", "support_messages",
+                      "auto_configs", "test_configs", "test_deliveries"):
                 db_run(f"DELETE FROM {t}")
         else:
             await query.answer("❌ نامعتبر", show_alert=True)
@@ -1877,15 +2583,15 @@ async def admin_settings_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     kb = [
         [InlineKeyboardButton(f"🔧 تعمیر: {'خاموش کردن' if maintenance == '1' else 'روشن کردن'}",
-                               callback_data="toggle_maintenance")],
-        [InlineKeyboardButton("🔔 تنظیمات اطلاع‌رسانی", callback_data="admin_notify_settings")],
-        [InlineKeyboardButton("💳 تغییر شماره کارت", callback_data="set_card_number_entry")],
-        [InlineKeyboardButton("👤 تغییر نام صاحب کارت", callback_data="set_card_holder_entry")],
-        [InlineKeyboardButton("☎️ تغییر آیدی پشتیبانی", callback_data="set_support_username_entry")],
-        [InlineKeyboardButton("📝 تغییر پیام خوش‌آمدگویی", callback_data="set_welcome_entry")],
-        [InlineKeyboardButton("🎁 تغییر هدیه عضویت", callback_data="set_signup_bonus_entry")],
-        [InlineKeyboardButton("🤝 تغییر هدیه دعوت", callback_data="set_referral_bonus_entry")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")],
+                               callback_data="toggle_maintenance", style="danger")],
+        [InlineKeyboardButton("🔔 تنظیمات اطلاع‌رسانی", callback_data="admin_notify_settings", style="primary")],
+        [InlineKeyboardButton("💳 تغییر شماره کارت", callback_data="set_card_number_entry", style="primary")],
+        [InlineKeyboardButton("👤 تغییر نام صاحب کارت", callback_data="set_card_holder_entry", style="primary")],
+        [InlineKeyboardButton("☎️ تغییر آیدی پشتیبانی", callback_data="set_support_username_entry", style="primary")],
+        [InlineKeyboardButton("📝 تغییر پیام خوش‌آمدگویی", callback_data="set_welcome_entry", style="primary")],
+        [InlineKeyboardButton("🎁 تغییر هدیه عضویت", callback_data="set_signup_bonus_entry", style="primary")],
+        [InlineKeyboardButton("🤝 تغییر هدیه دعوت", callback_data="set_referral_bonus_entry", style="primary")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back", style="primary")],
     ]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -1907,11 +2613,11 @@ async def admin_notify_settings_cb(update: Update, context: ContextTypes.DEFAULT
         f"💬 اطلاع پیام پشتیبانی: {flag('support_notify')}"
     )
     kb = [
-        [InlineKeyboardButton("🆕 تغییر وضعیت اطلاع کاربر جدید", callback_data="toggle_join_notify")],
-        [InlineKeyboardButton("🛒 تغییر وضعیت اطلاع خرید", callback_data="toggle_purchase_notify")],
-        [InlineKeyboardButton("💳 تغییر وضعیت اطلاع شارژ", callback_data="toggle_deposit_notify")],
-        [InlineKeyboardButton("💬 تغییر وضعیت اطلاع پشتیبانی", callback_data="toggle_support_notify")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_settings")],
+        [InlineKeyboardButton("🆕 تغییر وضعیت اطلاع کاربر جدید", callback_data="toggle_join_notify", style="primary")],
+        [InlineKeyboardButton("🛒 تغییر وضعیت اطلاع خرید", callback_data="toggle_purchase_notify", style="success")],
+        [InlineKeyboardButton("💳 تغییر وضعیت اطلاع شارژ", callback_data="toggle_deposit_notify", style="primary")],
+        [InlineKeyboardButton("💬 تغییر وضعیت اطلاع پشتیبانی", callback_data="toggle_support_notify", style="primary")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_settings", style="primary")],
     ]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -2217,6 +2923,43 @@ def main():
         per_user=True,
     )
 
+    admin_auto_add_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_auto_add_entry, pattern=r"^auto_add_pkg_(5|10|20)$")],
+        states={
+            ADMIN_AUTO_ADD_CFG: [
+                # اگه ادمین وسط افزودن کانفیگ برای یه پکیج دیگه بزنه، هدف عوض میشه نه اینکه بی‌پاسخ بمونه
+                CallbackQueryHandler(admin_auto_add_entry, pattern=r"^auto_add_pkg_(5|10|20)$"),
+                CallbackQueryHandler(auto_add_more_cb, pattern=r"^auto_add_more$"),
+                CallbackQueryHandler(auto_add_finish_cb, pattern=r"^auto_add_finish$"),
+                MessageHandler(
+                    (filters.TEXT | filters.PHOTO | filters.ANIMATION | filters.Document.ALL) & ~filters.COMMAND,
+                    receive_auto_config
+                ),
+            ],
+        },
+        fallbacks=common_fallbacks,
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
+    admin_test_add_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_test_add_entry, pattern=r"^admin_test_add_entry$")],
+        states={
+            ADMIN_TEST_ADD_CFG: [
+                CallbackQueryHandler(admin_test_add_entry, pattern=r"^admin_test_add_entry$"),
+                CallbackQueryHandler(test_add_more_cb, pattern=r"^test_add_more$"),
+                CallbackQueryHandler(test_add_finish_cb, pattern=r"^test_add_finish$"),
+                MessageHandler(
+                    (filters.TEXT | filters.PHOTO | filters.ANIMATION | filters.Document.ALL) & ~filters.COMMAND,
+                    receive_test_config
+                ),
+            ],
+        },
+        fallbacks=common_fallbacks,
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
     set_welcome_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(set_welcome_entry, pattern=r"^set_welcome_entry$")],
         states={SET_WELCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_welcome)]},
@@ -2280,14 +3023,15 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(MessageHandler(filters.Sticker.ALL, sticker_id_grabber))
     app.add_handler(CallbackQueryHandler(check_join_cb, pattern=r"^check_join$"))
 
     # گفتگوهای چندمرحله‌ای (هر کدوم مستقل، برای جلوگیری از قفل شدن بقیه دکمه‌ها)
     for conv in (
         coin_conv, search_conv, send_msg_conv, support_conv, admin_reply_conv,
         broadcast_conv, charge_custom_conv, charge_receipt_conv, buy_config_conv,
-        admin_sendcfg_conv, set_price_conv, set_welcome_conv,
-        set_card_number_conv, set_card_holder_conv, set_support_username_conv,
+        admin_sendcfg_conv, set_price_conv, admin_auto_add_conv, admin_test_add_conv,
+        set_welcome_conv, set_card_number_conv, set_card_holder_conv, set_support_username_conv,
         set_signup_bonus_conv, set_referral_bonus_conv, admin_add_conv,
     ):
         app.add_handler(conv)
@@ -2297,12 +3041,26 @@ def main():
     app.add_handler(CallbackQueryHandler(help_cb, pattern=r"^help$"))
     app.add_handler(CallbackQueryHandler(invite_cb, pattern=r"^invite$"))
     app.add_handler(CallbackQueryHandler(wallet, pattern=r"^wallet$"))
+    app.add_handler(CallbackQueryHandler(account_info_cb, pattern=r"^account_info$"))
+    app.add_handler(CallbackQueryHandler(noop_cb, pattern=r"^noop$"))
     app.add_handler(CallbackQueryHandler(tx_history, pattern=r"^tx_history$"))
     app.add_handler(CallbackQueryHandler(support_entry_cb, pattern=r"^support_entry$"))
 
     # خرید کانفیگ
     app.add_handler(CallbackQueryHandler(cfg_confirm_cb, pattern=r"^cfg_confirm$"))
     app.add_handler(CallbackQueryHandler(cfg_cancel_cb, pattern=r"^cfg_cancel$"))
+
+    # خرید اتوماتیک
+    app.add_handler(CallbackQueryHandler(auto_buy_menu_cb, pattern=r"^auto_buy_menu$"))
+    app.add_handler(CallbackQueryHandler(auto_pkg_select_cb, pattern=r"^auto_pkg_(5|10|20)$"))
+    app.add_handler(CallbackQueryHandler(auto_confirm_cb, pattern=r"^auto_confirm_(5|10|20)$"))
+    app.add_handler(CallbackQueryHandler(auto_cancel_cb, pattern=r"^auto_cancel$"))
+    app.add_handler(CallbackQueryHandler(admin_auto_menu_cb, pattern=r"^admin_auto_menu$"))
+
+    # تست رایگان
+    app.add_handler(CallbackQueryHandler(free_test_entry_cb, pattern=r"^free_test_entry$"))
+    app.add_handler(CallbackQueryHandler(free_test_claim_cb, pattern=r"^free_test_claim$"))
+    app.add_handler(CallbackQueryHandler(admin_test_menu_cb, pattern=r"^admin_test_menu$"))
 
     # شارژ کیف پول
     app.add_handler(CallbackQueryHandler(charge_wallet_entry, pattern=r"^charge_wallet$"))
@@ -2335,8 +3093,8 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_manage_admins_cb, pattern=r"^admin_manage_admins$"))
     app.add_handler(CallbackQueryHandler(admin_rm_cb, pattern=r"^admin_rm_(\d+)$"))
     app.add_handler(CallbackQueryHandler(admin_wipe_menu_cb, pattern=r"^admin_wipe_menu$"))
-    app.add_handler(CallbackQueryHandler(wipe_ask_cb, pattern=r"^wipe_ask_(tx|orders|support|users|full)$"))
-    app.add_handler(CallbackQueryHandler(wipe_do_cb, pattern=r"^wipe_do_(tx|orders|support|users|full)$"))
+    app.add_handler(CallbackQueryHandler(wipe_ask_cb, pattern=r"^wipe_ask_(tx|orders|support|auto|test|users|full)$"))
+    app.add_handler(CallbackQueryHandler(wipe_do_cb, pattern=r"^wipe_do_(tx|orders|support|auto|test|users|full)$"))
 
     # ⛑ شبکه‌ی ایمنی: اگه هیچ‌کدوم از بالا یه callback query رو مدیریت نکردن (مثلاً چون یه
     # گفتگوی نیمه‌تموم دیگه باز مونده)، حداقل یه پاسخ به کاربر/ادمین بدیم، نه سکوت مطلق.
