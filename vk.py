@@ -529,7 +529,7 @@ async def help_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━\n"
         "🛒 از «خرید کانفیگ» حجم دلخواهت رو انتخاب و پرداخت کن\n"
         "💳 از «شارژ کیف پول» حساب خودت رو شارژ کن\n"
-        "💰 موجودی و تاریخچه در «اعتبار کیف پول»\n"
+        "💰موجودی و تاریخچه در «اعتبار کیف پول»\n"
         "🎉 با «دعوت دوستان» به ازای هر معرفی جایزه بگیر\n"
         f"💬 سوال داشتی به پشتیبانی پیام بده: @{get_support_username()}"
     )
@@ -583,7 +583,7 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"مجموع خرید: {fmt_money(user['total_spent'])} تومان"
     )
     kb = [
-        [InlineKeyboardButton("💳 شارژ کیف پول", callback_data="charge_wallet")],
+        [InlineKeyboardButton("💳شارژ کیف پول", callback_data="charge_wallet")],
         [InlineKeyboardButton("📜 تاریخچه تراکنش‌ها", callback_data="tx_history")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
     ]
