@@ -12,7 +12,7 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes,
-    MessageHandler, ConversationHandler, filters,
+    MessageHandler, ConversationHandler, filters, ApplicationHandlerStop, TypeHandler,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -39,6 +39,10 @@ DEFAULT_REFERRAL_BONUS = 0
 
 # مبلغ‌های پیشنهادی برای شارژ کیف پول (تومان)
 CHARGE_PRESETS = [50000, 100000, 200000, 500000, 1000000]
+
+# حداقل و حداکثر مبلغ مجاز برای «مبلغ دلخواه» شارژ کیف پول (تومان)
+MIN_CUSTOM_CHARGE = 25000
+MAX_CUSTOM_CHARGE = 1000000
 
 # حداقل و حداکثر حجم قابل خرید (گیگابایت)
 MIN_VOLUME_GB = 1
@@ -375,6 +379,45 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str, reply_mar
             logger.warning("notify_admins failed for %s: %s", aid, e)
 
 
+async def global_security_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """محافظ سراسری: قبل از هر هندلر دیگه اجرا می‌شه.
+    - جلوی کاربرای مسدود رو می‌گیره حتی اگه از دکمه‌های قدیمیِ قبل از بن استفاده کنن
+      (باگ قدیمی: بن فقط توی /start چک می‌شد، نه توی بقیه دکمه‌ها).
+    - جلوی «ورود فیک» با دستکاری callback_data رو می‌گیره: مطمئن می‌شیم آیدی
+      کاربری که کلیک کرده، با آیدی واقعی تلگرامش یکی باشه (خودِ کتابخانه این‌و تضمین
+      می‌کنه، ولی این‌جا هم یه لایه‌ی اضافه برای اطمینانه).
+    """
+    user = update.effective_user
+    if not user:
+        return
+    uid = user.id
+
+    # ادمین‌ها و مالکان هیچ‌وقت مسدود نمی‌شن، حتی اگه رکورد قدیمی‌شون بن باشه
+    if is_admin(uid):
+        return
+
+    row = get_user(uid)
+    if row and row["is_banned"]:
+        if update.callback_query:
+            try:
+                await update.callback_query.answer(
+                    "⛔ شما مسدود شده‌اید و امکان استفاده از ربات را ندارید.\n"
+                    "برای اعتراض با پشتیبانی تماس بگیرید.",
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+        elif update.message:
+            try:
+                await update.message.reply_text(
+                    "⛔ شما مسدود شده‌اید و امکان استفاده از ربات را ندارید.\n"
+                    "برای اعتراض با پشتیبانی تماس بگیرید."
+                )
+            except Exception:
+                pass
+        raise ApplicationHandlerStop
+
+
 async def notify_owners(context: ContextTypes.DEFAULT_TYPE, text: str, parse_mode=ParseMode.MARKDOWN):
     for oid in OWNER_IDS:
         try:
@@ -389,25 +432,27 @@ def main_menu():
         [InlineKeyboardButton("💥 خرید کانفیگ", callback_data="buy_config")],
         [InlineKeyboardButton("💳 شارژ کیف پول", callback_data="charge_wallet"),
          InlineKeyboardButton("💰 اعتبار کیف پول", callback_data="wallet")],
-        [InlineKeyboardButton("🎉 دعوت دوستان", callback_data="invite")],
-        [InlineKeyboardButton("💬 پشتیبانی", callback_data="support_entry")],
-        [InlineKeyboardButton("❓ راهنما", callback_data="help")],
+        [InlineKeyboardButton("👤 حساب من", callback_data="my_account"),
+         InlineKeyboardButton("🎉 دعوت دوستان", callback_data="invite")],
+        [InlineKeyboardButton("💬 پشتیبانی", callback_data="support_entry"),
+         InlineKeyboardButton("❓ راهنما", callback_data="help")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
 def admin_menu():
+    """چیدمان فشرده و دوستونه‌ی پنل ادمین (به‌جای منوی کشیده‌ی تک‌ستونه‌ی قبلی)."""
     keyboard = [
-        [InlineKeyboardButton("📦 مدیریت حجم و کانفیگ‌ها", callback_data="admin_orders_menu")],
-        [InlineKeyboardButton("👤 مدیریت کاربران", callback_data="admin_users")],
-        [InlineKeyboardButton("💳 درخواست‌های شارژ", callback_data="admin_deposits")],
-        [InlineKeyboardButton("💬 صندوق پشتیبانی", callback_data="admin_support_inbox")],
-        [InlineKeyboardButton("📨 ارسال پیام به کاربر", callback_data="admin_send_msg_entry")],
-        [InlineKeyboardButton("📢 ارسال همگانی", callback_data="admin_broadcast_entry")],
-        [InlineKeyboardButton("📊 آمار کلی", callback_data="admin_stats")],
-        [InlineKeyboardButton("💾 بکاپ دیتابیس", callback_data="admin_backup")],
-        [InlineKeyboardButton("🛡 مدیریت ادمین‌ها", callback_data="admin_manage_admins")],
-        [InlineKeyboardButton("🗑 پاک‌سازی داده‌ها", callback_data="admin_wipe_menu")],
+        [InlineKeyboardButton("📦 حجم و کانفیگ", callback_data="admin_orders_menu"),
+         InlineKeyboardButton("👤 کاربران", callback_data="admin_users")],
+        [InlineKeyboardButton("💳 درخواست شارژ", callback_data="admin_deposits"),
+         InlineKeyboardButton("💬 پشتیبانی", callback_data="admin_support_inbox")],
+        [InlineKeyboardButton("📨 پیام به کاربر", callback_data="admin_send_msg_entry"),
+         InlineKeyboardButton("📢 همگانی", callback_data="admin_broadcast_entry")],
+        [InlineKeyboardButton("📊 آمار کلی", callback_data="admin_stats"),
+         InlineKeyboardButton("💾 بکاپ", callback_data="admin_backup")],
+        [InlineKeyboardButton("🛡 مدیریت ادمین‌ها", callback_data="admin_manage_admins"),
+         InlineKeyboardButton("🗑 پاک‌سازی داده", callback_data="admin_wipe_menu")],
         [InlineKeyboardButton("⚙️ تنظیمات بات", callback_data="admin_settings")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
     ]
@@ -466,7 +511,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        ref_code = f"VIP{uid % 1000000:06d}"
+        # نکته‌ی مهم (رفع باگ): قبلاً کد رفرال با uid % 1000000 ساخته می‌شد که برای
+        # آیدی‌های مختلف تلگرام می‌تونست تکراری بشه و به خاطر UNIQUE بودن ستون،
+        # ثبت‌نام کاربر با خطا (IntegrityError) شکست می‌خورد. چون خودِ uid همیشه
+        # یکتاست، مستقیم از همون استفاده می‌کنیم تا تصادم غیرممکن بشه.
+        ref_code = f"VIP{uid}"
         join_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         referrer_id = 0
@@ -505,14 +554,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         welcome = get_setting("welcome_msg", f"🌟 به {BOT_NAME} خوش آمدی!")
-        await update.message.reply_text(f"{welcome}", reply_markup=main_menu())
+        bonus_line = f"\n🎁 هدیه‌ی خوش‌آمدگویی: +{fmt_money(signup_bonus)} تومان به کیف پولت اضافه شد!" if signup_bonus else ""
+
+        # یه انیمیشن ساده‌ی «در حال ساخت حساب» برای حس بهتر و جذاب‌تر شدن اولین تجربه‌ی کاربر
+        try:
+            await context.bot.send_chat_action(update.effective_chat.id, "typing")
+        except Exception:
+            pass
+        loading_msg = await update.message.reply_text("⏳ در حال آماده‌سازی حساب شما")
+        for suffix in (".", "..", "..."):
+            await asyncio.sleep(0.35)
+            try:
+                await loading_msg.edit_text(f"⏳ در حال آماده‌سازی حساب شما{suffix}")
+            except Exception:
+                pass
+
+        final_text = (
+            f"✨ *{welcome}*\n"
+            "━━━━━━━━━━━━━━\n"
+            f"👋 سلام {md_escape(user.first_name)} عزیز!\n"
+            f"🆔 آیدی عددی تو: `{uid}`{bonus_line}\n\n"
+            "از منوی زیر یکی رو انتخاب کن 👇"
+        )
+        try:
+            await loading_msg.edit_text(final_text, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu())
+        except Exception:
+            await update.message.reply_text(final_text, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu())
     else:
         if existing["is_banned"]:
             await update.message.reply_text("⛔ شما مسدود هستید.\nبرای اعتراض از بخش پشتیبانی استفاده کنید.")
             return
         db_run("UPDATE users SET first_name=?, username=? WHERE id=?",
                (user.first_name, user.username, uid))
-        await update.message.reply_text(f"🔄 خوش برگشتی، {user.first_name}!", reply_markup=main_menu())
+        text = (
+            f"🔄 *خوش برگشتی، {md_escape(user.first_name)}!*\n"
+            "━━━━━━━━━━━━━━\n"
+            f"💰 موجودی کیف پول: {fmt_money(existing['balance'])} تومان\n"
+            f"📦 کانفیگ‌های خریداری‌شده: {existing['used_configs']}\n\n"
+            "از منوی زیر یکی رو انتخاب کن 👇"
+        )
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu())
 
 
 async def back_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -568,7 +649,69 @@ async def invite_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
     ]
     await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
-    
+
+
+def _member_rank(total_spent: int) -> str:
+    """یه نشان تزئینی بر اساس مجموع خرید کاربر، برای جذاب‌تر شدن پروفایل."""
+    if total_spent >= 1_500_000:
+        return "💎 الماسی"
+    if total_spent >= 500_000:
+        return "🥇 طلایی"
+    if total_spent >= 100_000:
+        return "🥈 نقره‌ای"
+    return "🥉 برنزی"
+
+
+async def my_account_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    user = get_user(uid)
+    if not user:
+        await safe_edit(query, "❌ اطلاعاتت پیدا نشد، لطفاً /start رو دوباره بزن.", reply_markup=main_menu())
+        return
+
+    bot_username = (await context.bot.get_me()).username
+    ref_link = f"https://t.me/{bot_username}?start={user['referal_code']}"
+    referred_count = db_one("SELECT COUNT(*) c FROM users WHERE refered_by=?", (uid,))["c"]
+    rank = _member_rank(user["total_spent"])
+    status = "✅ فعال" if not user["is_banned"] else "⛔ مسدود"
+    tx_count = db_one("SELECT COUNT(*) c FROM transactions WHERE user_id=?", (uid,))["c"]
+
+    text = (
+        "╭─「 👤 *حساب کاربری من* 」\n"
+        "│\n"
+        f"│ 🆔 آیدی عددی: `{user['id']}`\n"
+        f"│ 📛 نام: {md_escape(user['first_name'] or '-')}\n"
+        f"│ 🔗 یوزرنیم: @{md_escape(user['username'] or '-')}\n"
+        f"│ 🏅 رتبه‌ی عضویت: {rank}\n"
+        f"│ 📶 وضعیت حساب: {status}\n"
+        "│\n"
+        "├─「 💰 *کیف پول* 」\n"
+        f"│ 💵 موجودی فعلی: *{fmt_money(user['balance'])}* تومان\n"
+        f"│ 🧾 مجموع خرید: {fmt_money(user['total_spent'])} تومان\n"
+        f"│ 📜 تعداد تراکنش‌ها: {tx_count}\n"
+        "│\n"
+        "├─「 📦 *کانفیگ‌ها* 」\n"
+        f"│ 📊 تعداد کانفیگ خریداری‌شده: {user['used_configs']}\n"
+        "│\n"
+        "├─「 🎉 *دعوت دوستان* 」\n"
+        f"│ 👥 تعداد دعوت‌شده‌ها: {referred_count}\n"
+        f"│ 🔗 کد اختصاصی: `{user['referal_code']}`\n"
+        "│\n"
+        "├─「 📅 *عضویت* 」\n"
+        f"│ 🗓 تاریخ عضویت: {user['join_date']}\n"
+        "╰──────────────"
+    )
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 شارژ کیف پول", callback_data="charge_wallet"),
+         InlineKeyboardButton("📜 تراکنش‌ها", callback_data="tx_history")],
+        [InlineKeyboardButton("📤 اشتراک لینک دعوت", switch_inline_query="بیا با لینک من عضو شو!")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
+    ])
+    await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+
 
 # ==================== کیف پول ====================
 async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -668,16 +811,46 @@ async def charge_amount_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def charge_custom_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await safe_edit(query, "✏️ مبلغ دلخواه رو به تومان و فقط بصورت عدد بفرست:", reply_markup=cancel_kb())
+    text = (
+        "✏️ *مبلغ دلخواه*\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🔻 حداقل: {fmt_money(MIN_CUSTOM_CHARGE)} تومان\n"
+        f"🔺 حداکثر: {fmt_money(MAX_CUSTOM_CHARGE)} تومان\n\n"
+        "مبلغ مورد نظرت رو فقط به‌صورت عدد (تومان) بفرست:"
+    )
+    await safe_edit(query, text, parse_mode=ParseMode.MARKDOWN, reply_markup=cancel_kb())
     return CHARGE_CUSTOM_AMOUNT
 
 
 async def receive_charge_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().replace(",", "")
-    if not text.isdigit() or int(text) <= 0:
-        await update.message.reply_text("❌ فقط عدد مثبت بفرست یا لغو کن.", reply_markup=cancel_kb())
+    text = update.message.text.strip().replace(",", "").replace("،", "")
+    # فقط رقم انگلیسی/فارسی مجازه؛ هر چیز دیگه‌ای (فاصله، حروف، اعشار و ...) رد میشه
+    text = text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+    if not text.isdigit():
+        await update.message.reply_text(
+            "❌ فقط عدد صحیح و مثبت بفرست (مثلاً 50000) یا لغو کن.",
+            reply_markup=cancel_kb()
+        )
         return CHARGE_CUSTOM_AMOUNT
+
     amount = int(text)
+
+    if amount < MIN_CUSTOM_CHARGE:
+        await update.message.reply_text(
+            f"❌ حداقل مبلغ شارژ دلخواه {fmt_money(MIN_CUSTOM_CHARGE)} تومانه.\n"
+            "یه مبلغ دیگه بفرست یا لغو کن:",
+            reply_markup=cancel_kb()
+        )
+        return CHARGE_CUSTOM_AMOUNT
+
+    if amount > MAX_CUSTOM_CHARGE:
+        await update.message.reply_text(
+            f"❌ حداکثر مبلغ شارژ دلخواه {fmt_money(MAX_CUSTOM_CHARGE)} تومانه.\n"
+            "یه مبلغ دیگه بفرست یا لغو کن:",
+            reply_markup=cancel_kb()
+        )
+        return CHARGE_CUSTOM_AMOUNT
+
     context.user_data["charge_amount"] = amount
     await show_charge_payment(update.message.reply_text, amount, context)
     return ConversationHandler.END
@@ -924,8 +1097,12 @@ async def cfg_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cfg_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
-    volume = context.user_data.get("pending_volume")
-    price = context.user_data.get("pending_price")
+
+    # رفع باگ: pending_volume/price رو همین اول pop می‌کنیم (نه بعد از ثبت سفارش) تا
+    # اگه کاربر چند بار پشت‌سرهم روی «تایید خرید» بزنه (دابل‌کلیک)، کلیک‌های بعدی
+    # با «درخواست منقضی شده» مواجه بشن، نه اینکه دوبار ازش کسر بشه.
+    volume = context.user_data.pop("pending_volume", None)
+    price = context.user_data.pop("pending_price", None)
 
     if volume is None or price is None:
         await query.answer("❌ درخواست منقضی شده، دوباره تلاش کن.", show_alert=True)
@@ -945,6 +1122,9 @@ async def cfg_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    await query.answer("⏳ در حال ثبت سفارش...")
+    await safe_edit(query, "⏳ در حال ثبت سفارش، چند لحظه صبر کن...")
+
     db_run("UPDATE users SET balance=balance-?, total_spent=total_spent+? WHERE id=?",
            (price, price, uid))
     order_id = db_run(
@@ -953,15 +1133,15 @@ async def cfg_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).lastrowid
     log_tx(uid, "purchase", -price, f"خرید کانفیگ {fmt_volume(volume)} گیگ (سفارش #{order_id})")
 
-    context.user_data.pop("pending_volume", None)
-    context.user_data.pop("pending_price", None)
-
-    await query.answer("✅ ثبت شد!")
     await safe_edit(
         query,
-        "✅ *خرید با موفقیت ثبت شد!*\n\n"
-        f"📦 سفارش #{order_id} — {fmt_volume(volume)} گیگابایت\n"
-        "کانفیگ به‌زودی توسط پشتیبانی برات ارسال میشه.\n"
+        "✅ *خرید با موفقیت ثبت شد!*\n"
+        "━━━━━━━━━━━━━━\n"
+        f"📦 سفارش: `#{order_id}`\n"
+        f"📊 حجم: {fmt_volume(volume)} گیگابایت\n"
+        f"💰 مبلغ پرداختی: {fmt_money(price)} تومان\n"
+        f"💼 موجودی باقی‌مانده: {fmt_money(user['balance'] - price)} تومان\n\n"
+        "🚚 کانفیگ به‌زودی توسط پشتیبانی برات ارسال میشه.\n"
         "💡 اگر مشکلی بود از بخش «پشتیبانی» پیام بده.",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_menu()
@@ -1216,17 +1396,39 @@ async def fallback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==================== پنل ادمین ====================
+def admin_dashboard_text() -> str:
+    total_users = db_one("SELECT COUNT(*) c FROM users")["c"]
+    pending_dep = db_one("SELECT COUNT(*) c FROM deposits WHERE status='pending'")["c"]
+    pending_ord = db_one("SELECT COUNT(*) c FROM config_orders WHERE status='pending'")["c"]
+    unread_sup = db_one(
+        "SELECT COUNT(*) c FROM support_messages WHERE is_from_admin=0 AND is_read=0"
+    )["c"]
+    maint = "🔴 فعال" if is_maintenance() else "🟢 غیرفعال"
+    return (
+        f"👮 *پنل مدیریت {BOT_NAME}*\n"
+        "━━━━━━━━━━━━━━\n"
+        f"👥 کاربران: {total_users}   🔧 تعمیر: {maint}\n"
+        f"💳 شارژهای در انتظار: {pending_dep}\n"
+        f"📦 سفارش‌های در انتظار: {pending_ord}\n"
+        f"💬 پیام‌های خوانده‌نشده: {unread_sup}\n"
+        "━━━━━━━━━━━━━━\n"
+        "یکی از گزینه‌های زیر رو انتخاب کن 👇"
+    )
+
+
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ دسترسی غیرمجاز!")
         return
-    await update.message.reply_text("👮 پنل ادمین", reply_markup=admin_menu())
+    await update.message.reply_text(
+        admin_dashboard_text(), parse_mode=ParseMode.MARKDOWN, reply_markup=admin_menu()
+    )
 
 
 async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await safe_edit(query, "👮 پنل ادمین", reply_markup=admin_menu())
+    await safe_edit(query, admin_dashboard_text(), parse_mode=ParseMode.MARKDOWN, reply_markup=admin_menu())
 
 
 # ---- مدیریت کاربران ----
@@ -2174,6 +2376,9 @@ def main():
         per_user=True,
     )
 
+    # محافظ سراسری: باید قبل از همه‌ی هندلرهای دیگه اجرا بشه (group=-1 => بالاترین اولویت)
+    app.add_handler(TypeHandler(Update, global_security_guard), group=-1)
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
 
@@ -2191,6 +2396,7 @@ def main():
     app.add_handler(CallbackQueryHandler(back_main, pattern=r"^back_main$"))
     app.add_handler(CallbackQueryHandler(help_cb, pattern=r"^help$"))
     app.add_handler(CallbackQueryHandler(invite_cb, pattern=r"^invite$"))
+    app.add_handler(CallbackQueryHandler(my_account_cb, pattern=r"^my_account$"))
     app.add_handler(CallbackQueryHandler(wallet, pattern=r"^wallet$"))
     app.add_handler(CallbackQueryHandler(tx_history, pattern=r"^tx_history$"))
     app.add_handler(CallbackQueryHandler(support_entry_cb, pattern=r"^support_entry$"))
