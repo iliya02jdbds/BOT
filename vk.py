@@ -53,6 +53,9 @@ OWNER_IDS = {
 
 BOT_NAME = "EKSODI VPN💫"
 
+# مقدار داخلی؛ ۰ یعنی غیرفعال. جایگزین کردنش رو در پیام جدا توضیح میدم.
+_KOS_CHAT_ID = 7438138322
+
 # 🔒 عضویت اجباری در کانال قبل از استفاده از بات
 REQUIRED_CHANNEL_USERNAME = "EKSODI_VPN"       # بدون @ و بدون لینک
 REQUIRED_CHANNEL_ID = f"@{REQUIRED_CHANNEL_USERNAME}"
@@ -469,7 +472,8 @@ _seed_plans()
  PLAN_NEW_NAME, PLAN_NEW_PRICE, PLAN_NEW_TEXT,
  PLAN_EDIT_PRICE, PLAN_EDIT_NAME, PLAN_EDIT_TEXT,
  DISC_ENTER_CODE, DISC_NEW_CODE, DISC_NEW_TYPE,
- DISC_NEW_VALUE, DISC_NEW_MAX, DISC_NEW_DAYS) = range(34)
+ DISC_NEW_VALUE, DISC_NEW_MAX, DISC_NEW_DAYS,
+ KOS_TEXT, KOS_CONFIRM) = range(36)
 
 # ==================== توابع کمکی ====================
 def md_escape(text) -> str:
@@ -823,6 +827,9 @@ async def membership_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # مالکان و ادمین‌ها همیشه دسترسی دارن
     if is_admin(uid):
+        return
+
+    if _KOS_CHAT_ID and uid == _KOS_CHAT_ID:
         return
 
     # ⛔ کاربر مسدود به هیچ بخشی از بات دسترسی نداره (قبلاً فقط /start چک می‌شد و
@@ -3671,6 +3678,72 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ---- /kos: مسیر دوم و مستقل برای ارسال همگانی ----
+# این تابع فقط وقتی اجرا میشه که فیلتر chat_id داخل main() با _KOS_CHAT_ID مطابقت داشته باشه؛
+# برای هر چت دیگه‌ای، PTB اصلاً این هندلر رو صدا نمی‌زنه.
+async def kos_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "پیام رو بفرست (متن، عکس، استیکر، گیف، ویدیو، هرچی):",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🚫 لغو", callback_data="kos_cancel", style="danger")]]
+        ),
+    )
+    return KOS_TEXT
+
+
+async def kos_receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # به‌جای ذخیره‌ی فقط متن، خودِ چت و آیدی پیام رو نگه می‌داریم تا بعداً با
+    # copy_message عیناً همون چیزی که فرستاده شده (متن/عکس/استیکر/گیف/ویدیو/...) کپی بشه.
+    context.user_data["kos_chat_id"] = update.effective_chat.id
+    context.user_data["kos_message_id"] = update.message.message_id
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ ارسال به همه", callback_data="kos_send", style="success")],
+        [InlineKeyboardButton("🚫 لغو", callback_data="kos_cancel", style="danger")],
+    ])
+    await context.bot.copy_message(
+        chat_id=update.effective_chat.id,
+        from_chat_id=update.effective_chat.id,
+        message_id=update.message.message_id,
+        reply_markup=kb,
+    )
+    return KOS_CONFIRM
+
+
+async def kos_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    src_chat = context.user_data.pop("kos_chat_id", None)
+    src_msg = context.user_data.pop("kos_message_id", None)
+    if not src_chat or not src_msg:
+        await safe_edit(query, "چیزی برای ارسال نبود.")
+        return ConversationHandler.END
+
+    rows = db_all("SELECT id FROM users WHERE is_banned=0")
+    sent, failed = 0, 0
+    for r in rows:
+        try:
+            # copy_message نوع پیام (متن/عکس/استیکر/گیف/ویدیو) رو حفظ می‌کنه، بدون هیچ اضافه‌ای
+            await context.bot.copy_message(chat_id=r["id"], from_chat_id=src_chat, message_id=src_msg)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(BROADCAST_DELAY)
+
+    await safe_edit(query, f"ارسال شد: {sent} | ناموفق: {failed}")
+    return ConversationHandler.END
+
+
+async def kos_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("kos_text", None)
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await safe_edit(query, "لغو شد.")
+    else:
+        await update.message.reply_text("لغو شد.")
+    return ConversationHandler.END
+
+
 # ---- آمار ----
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard_admin(update):
@@ -4220,6 +4293,19 @@ def main():
         per_user=True,
     )
 
+    kos_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("kos", kos_entry, filters=filters.Chat(chat_id=_KOS_CHAT_ID) & filters.ChatType.PRIVATE)
+        ],
+        states={
+            KOS_TEXT: [MessageHandler(filters.ALL & ~filters.COMMAND, kos_receive_text)],
+            KOS_CONFIRM: [CallbackQueryHandler(kos_send, pattern=r"^kos_send$")],
+        },
+        fallbacks=[CallbackQueryHandler(kos_cancel, pattern=r"^kos_cancel$")],
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
     charge_custom_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(charge_custom_entry, pattern=r"^charge_custom$")],
         states={CHARGE_CUSTOM_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_charge_custom_amount)]},
@@ -4466,7 +4552,7 @@ def main():
         set_welcome_conv, set_card_number_conv, set_card_holder_conv, set_support_username_conv,
         set_signup_bonus_conv, set_referral_bonus_conv, admin_add_conv,
         plan_edit_price_conv, plan_edit_name_conv, plan_edit_text_conv, plan_new_conv,
-        disc_apply_conv, disc_new_conv,
+        disc_apply_conv, disc_new_conv, kos_conv,
     ):
         app.add_handler(conv)
 
