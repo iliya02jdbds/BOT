@@ -233,6 +233,66 @@ CREATE TABLE IF NOT EXISTS test_deliveries (
 )
 """)
 
+# 🔒 رفع باگ امنیتی: اگه جدول test_deliveries از قبل بدون UNIQUE ساخته شده باشه
+# (مثلاً قبل از این نسخه)، ensure_columns نمی‌تونه constraint اضافه کنه و کاربر
+# می‌تونه بیش از یک‌بار تست بگیره. این migration: اول تکراری‌ها رو پاک می‌کنه
+# (فقط اولین تحویل هر کاربر نگه داشته میشه)، بعد UNIQUE index رو می‌سازه.
+def _ensure_test_deliveries_unique():
+    # ۱. چک کن آیا UNIQUE index از قبل وجود داره
+    indexes = db_all("PRAGMA index_list(test_deliveries)")
+    has_unique = False
+    for idx in indexes:
+        # index_info اسم ستون‌های داخل index رو میده
+        cols = db_all(f"PRAGMA index_info({idx['name']})")
+        if any(c["name"] == "user_id" for c in cols):
+            # sqlite_autoindex_test_deliveries_1 از UNIQUE تو CREATE TABLE ساخته میشه
+            if "autoindex" in idx["name"].lower() or idx.get("unique"):
+                has_unique = True
+                break
+
+    if has_unique:
+        return
+
+    logger.warning("migration: test_deliveries.user_id is NOT unique — fixing now (de-dup + unique index)")
+
+    # ۲. حذف تکراری‌ها: فقط اولین تحویل هر کاربر نگه داشته بشه
+    #    delivered_configs/delivered_count مربوط به ردیف‌های حذف‌شده هم برگرده
+    dup_rows = db_all("""
+        SELECT user_id, MIN(id) AS keep_id, COUNT(*) AS dup_count
+        FROM test_deliveries
+        GROUP BY user_id
+        HAVING COUNT(*) > 1
+    """)
+    for d in dup_rows:
+        # برای هر کاربر، ردیف‌های تکراری (به‌جز اولی) رو حذف کن
+        # و delivered_count کانفیگ تست متناظر رو به همون تعداد کم کن
+        extras = db_all(
+            "SELECT test_config_id FROM test_deliveries WHERE user_id=? AND id<>?",
+            (d["user_id"], d["keep_id"]),
+        )
+        db_run(
+            "DELETE FROM test_deliveries WHERE user_id=? AND id<>?",
+            (d["user_id"], d["keep_id"]),
+        )
+        for ex in extras:
+            if ex["test_config_id"]:
+                db_run(
+                    "UPDATE test_configs SET delivered_count=MAX(delivered_count-1,0) WHERE id=?",
+                    (ex["test_config_id"],),
+                )
+        logger.info("migration: dedup user_id=%s removed %s duplicates", d["user_id"], d["dup_count"] - 1)
+
+    # ۳. ساخت UNIQUE index
+    try:
+        db_run("CREATE UNIQUE INDEX IF NOT EXISTS idx_test_deliveries_user_id ON test_deliveries(user_id)")
+        logger.info("migration: created UNIQUE index idx_test_deliveries_user_id")
+    except Exception as e:
+        logger.error("migration: failed to create unique index: %s", e)
+        raise
+
+
+_ensure_test_deliveries_unique()
+
 db_run("""
 CREATE TABLE IF NOT EXISTS bot_settings (
     key TEXT PRIMARY KEY,
@@ -2962,6 +3022,27 @@ async def receive_dnew_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==================== تست رایگان (هر کاربر فقط یک‌بار؛ هر کانفیگ تا ۳ نفر) ====================
+# 🔒 rate-limit در حافظه: اگه کاربری در ۱۰ ثانیه‌ی اخیر چندبار پشت سر هم تست رو
+# درخواست کنه (مثلاً با بات یا اسکریپت)، بلاک میشه. کلید: (user_id, action).
+_test_rl: dict = {}  # user_id -> (count, first_ts)
+TEST_RL_WINDOW = 10      # ثانیه
+TEST_RL_MAX = 4          # حداکثر ۴ تلاش در این بازه (بعدش بلاک)
+
+
+def _test_rate_limit_hit(uid: int) -> bool:
+    """True یعنی کاربر داره اسپم می‌کنه و باید بلاک شه."""
+    now = time.time()
+    entry = _test_rl.get(uid)
+    if not entry or (now - entry[1]) > TEST_RL_WINDOW:
+        _test_rl[uid] = (1, now)
+        return False
+    cnt, first = entry
+    if cnt >= TEST_RL_MAX:
+        return True
+    _test_rl[uid] = (cnt + 1, first)
+    return False
+
+
 def test_available_count() -> int:
     """تعداد کانفیگ‌های تست فعالی که هنوز ظرفیت تحویل دارن (برای نمایش به ادمین)."""
     return db_one(
@@ -2974,12 +3055,24 @@ def has_used_test(uid: int) -> bool:
     return db_one("SELECT 1 FROM test_deliveries WHERE user_id=?", (uid,)) is not None
 
 
+def _log_test_attempt(uid: int, action: str, ok: bool, extra: str = ""):
+    """لاگ حسابرسی: هر درخواست تست (موفق/ناموفق) ثبت میشه برای ردیابی سوءاستفاده."""
+    user = get_user(uid)
+    uname = f"@{user['username']}" if user and user["username"] else "-"
+    status = "✅" if ok else "❌"
+    logger.info(
+        "test_audit %s uid=%s uname=%s action=%s %s",
+        status, uid, uname, action, extra,
+    )
+
+
 async def free_test_entry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
 
     if has_used_test(uid):
+        _log_test_attempt(uid, "entry_view", ok=False, extra="already_used")
         await safe_edit(
             query,
             "🧪 *تست رایگان*\n━━━━━━━━━━━━━━\n"
@@ -3010,60 +3103,95 @@ async def free_test_claim_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     uid = query.from_user.id
 
+    # 🔒 rate-limit: جلوی بات/اسکریپت اسپم رو بگیر
+    if _test_rate_limit_hit(uid):
+        _log_test_attempt(uid, "claim", ok=False, extra="rate_limited")
+        await query.answer("⛔ خیلی سریع پشت سر هم درخواست می‌فرستی. چند ثانیه صبر کن.", show_alert=True)
+        return
+
+    # چک ۱: قبل از هر کاری، کاربر قبلاً تست گرفته یا نه
     if has_used_test(uid):
+        _log_test_attempt(uid, "claim", ok=False, extra="duplicate_block_pre")
         await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
         return
 
     await query.answer("⏳ در حال بررسی...")
 
-    # ممکنه چند کانفیگ تست هم‌زمان فعال باشن؛ همیشه از قدیمی‌ترینِ ناتموم استفاده می‌کنیم
-    # تا نفر دوم و سوم هم دقیقاً همون کانفیگِ نفر اول رو بگیرن، نه یه کانفیگ جدا.
+    # 🔒 تراکنش اتمیک: با BEGIN IMMEDIATE همه‌چیز یا با هم commit میشه یا هیچی.
+    # این جلوی race condition رو می‌گیره حتی اگه UNIQUE index نبود.
     claimed_row = None
-    for _ in range(5):
-        row = db_one(
-            "SELECT id, source_chat_id, source_message_id FROM test_configs "
-            "WHERE status='active' AND delivered_count<? ORDER BY id LIMIT 1",
-            (TEST_CONFIG_MAX_DELIVERIES,)
-        )
-        if not row:
-            break
-        cfg_id = row["id"]
-        # رزرو اتمیک یک "جایگاه" از همین کانفیگ (فقط اگه هنوز زیر سقف ۳ نفر بود)
-        cur = db_run(
-            "UPDATE test_configs SET delivered_count=delivered_count+1 "
-            "WHERE id=? AND status='active' AND delivered_count<?",
-            (cfg_id, TEST_CONFIG_MAX_DELIVERIES)
-        )
-        if cur.rowcount == 0:
-            continue  # یکی دیگه هم‌زمان همین آخرین جا رو برد؛ برو سراغ کانفیگ بعدی
-        claimed_row = row
-        break
+    cfg_id = None
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # چک ۲: داخل تراکنش هم چک کن (دفاع چندلایه)
+        if db_one("SELECT 1 FROM test_deliveries WHERE user_id=?", (uid,)):
+            conn.execute("ROLLBACK")
+            _log_test_attempt(uid, "claim", ok=False, extra="duplicate_block_in_tx")
+            await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
+            return
 
-    if not claimed_row:
+        # یک جایگاه از قدیمی‌ترین کانفیگ فعال رزرو کن
+        for _ in range(5):
+            row = db_one(
+                "SELECT id, source_chat_id, source_message_id FROM test_configs "
+                "WHERE status='active' AND delivered_count<? ORDER BY id LIMIT 1",
+                (TEST_CONFIG_MAX_DELIVERIES,)
+            )
+            if not row:
+                break
+            cur = conn.execute(
+                "UPDATE test_configs SET delivered_count=delivered_count+1 "
+                "WHERE id=? AND status='active' AND delivered_count<?",
+                (row["id"], TEST_CONFIG_MAX_DELIVERIES),
+            )
+            if cur.rowcount == 0:
+                continue
+            claimed_row = row
+            cfg_id = row["id"]
+            break
+
+        if not claimed_row:
+            conn.execute("ROLLBACK")
+            _log_test_attempt(uid, "claim", ok=False, extra="no_stock")
+            await safe_edit(
+                query,
+                "😔 فعلاً کانفیگ تستی موجود نیست.\nبعداً دوباره امتحان کن یا از «خرید کانفیگ» استفاده کن.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💥 خرید کانفیگ", callback_data="buy_config", style="success")],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
+                ])
+            )
+            return
+
+        # ثبت تحویل در همون تراکنش. اگه UNIQUE index باشه، IntegrityError میده.
+        try:
+            conn.execute(
+                "INSERT INTO test_deliveries (user_id, test_config_id, delivered_at) VALUES (?,?,?)",
+                (uid, cfg_id, time.time()),
+            )
+        except sqlite3.IntegrityError:
+            conn.execute("ROLLBACK")
+            _log_test_attempt(uid, "claim", ok=False, extra="integrity_error")
+            await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
+            return
+
+        conn.execute("COMMIT")
+    except Exception as e:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        logger.exception("test claim transaction failed for %s: %s", uid, e)
+        _log_test_attempt(uid, "claim", ok=False, extra=f"tx_error:{e}")
         await safe_edit(
             query,
-            "😔 فعلاً کانفیگ تستی موجود نیست.\nبعداً دوباره امتحان کن یا از «خرید کانفیگ» استفاده کن.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💥 خرید کانفیگ", callback_data="buy_config", style="success")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
-            ])
+            "❌ مشکلی پیش اومد، چند لحظه بعد دوباره امتحان کن.",
+            reply_markup=main_menu(),
         )
         return
 
-    cfg_id = claimed_row["id"]
-
-    # ثبت تحویل برای این کاربر؛ UNIQUE(user_id) جلوی گرفتن تست دوم رو حتی موقع رقابت هم‌زمان می‌گیره
-    try:
-        db_run(
-            "INSERT INTO test_deliveries (user_id, test_config_id, delivered_at) VALUES (?,?,?)",
-            (uid, cfg_id, time.time())
-        )
-    except sqlite3.IntegrityError:
-        # کاربر هم‌زمان از یه جای دیگه تست گرفته؛ جایگاهی که رزرو کردیم رو برگردون
-        db_run("UPDATE test_configs SET delivered_count=delivered_count-1 WHERE id=?", (cfg_id,))
-        await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
-        return
-
+    # ✅ تراکنش commit شد؛ حالا کانفیگ رو برای کاربر کپی کن.
+    # اگه ارسال شکست خورد، هم رکورد تحویل و هم رزرو رو برمی‌گردونیم (rollback نرم).
     try:
         await context.bot.copy_message(
             chat_id=uid,
@@ -3072,9 +3200,18 @@ async def free_test_claim_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
     except Exception as e:
         logger.error("test config delivery failed for %s: %s", uid, e)
-        # 🛡 شانس یک‌باره‌ی کاربر نسوزه: رزرو و ثبتِ تحویل کامل برمی‌گرده تا بعداً دوباره امتحان کنه
-        db_run("DELETE FROM test_deliveries WHERE user_id=?", (uid,))
-        db_run("UPDATE test_configs SET delivered_count=MAX(delivered_count-1,0) WHERE id=?", (cfg_id,))
+        # 🛡 شانس یک‌باره‌ی کاربر نسوزه
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM test_deliveries WHERE user_id=?", (uid,))
+            conn.execute(
+                "UPDATE test_configs SET delivered_count=MAX(delivered_count-1,0) WHERE id=?",
+                (cfg_id,),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            pass
+        _log_test_attempt(uid, "claim", ok=False, extra=f"copy_failed:{e}")
         await safe_edit(
             query,
             "❌ در ارسال کانفیگ تست مشکلی پیش اومد؛ نگران نباش، شانس تستت محفوظ موند.\n"
@@ -3087,6 +3224,8 @@ async def free_test_claim_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     updated = db_one("SELECT delivered_count FROM test_configs WHERE id=?", (cfg_id,))
     if updated and updated["delivered_count"] >= TEST_CONFIG_MAX_DELIVERIES:
         db_run("DELETE FROM test_configs WHERE id=?", (cfg_id,))
+
+    _log_test_attempt(uid, "claim", ok=True, extra=f"cfg={cfg_id}")
 
     await safe_edit(
         query,
