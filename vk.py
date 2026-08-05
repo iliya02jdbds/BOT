@@ -41,7 +41,7 @@ def InlineKeyboardButton(*args, **kwargs):  # noqa: F811
 TOKEN = os.environ["BOT_TOKEN"]
 
 OWNER_IDS = {
-    372424396,7438138322
+    372424396,7438138322,7090796517
 }
 
 BOT_NAME = "ویتو استور"
