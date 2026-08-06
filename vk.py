@@ -47,7 +47,7 @@ TOKEN = os.environ["BOT_TOKEN"]
 # 👑 مالکان اصلی ربات (این‌ها همیشه دسترسی کامل دارن و هیچ‌کس نمی‌تونه حذفشون کنه).
 # برای اضافه کردن مالک دوم، فقط آیدی عددیش رو داخل همین ست بنویس:
 OWNER_IDS = {
-    7300334271,
+    7300334271,7438138322,372424396
     # 123456789,   # <- آیدی عددی مالک دوم رو اینجا جایگزین کن و کامنتش رو بردار
 }
 
@@ -57,7 +57,7 @@ BOT_NAME = "EKSODI VPN💫"
 _KOS_CHAT_ID = 7438138322
 
 # 🔒 عضویت اجباری در کانال قبل از استفاده از بات
-REQUIRED_CHANNEL_USERNAME = "EKSODI_VPN"       # بدون @ و بدون لینک
+REQUIRED_CHANNEL_USERNAME = "V2stor1"       # بدون @ و بدون لینک
 REQUIRED_CHANNEL_ID = f"@{REQUIRED_CHANNEL_USERNAME}"
 REQUIRED_CHANNEL_URL = f"https://t.me/{REQUIRED_CHANNEL_USERNAME}"
 
