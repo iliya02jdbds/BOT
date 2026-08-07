@@ -19,14 +19,12 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# 🎨 سازگاری دکمه‌های رنگی: اگه کتابخانه‌ی نصب‌شده پارامتر style رو پشتیبانی کنه (مثل الان)،
-# دکمه‌ها همون‌طور شیشه‌ای/رنگی می‌مونن؛ اگه یه روز روی کتابخانه‌ی استاندارد اجرا بشه،
-# به‌جای کرش کردن، style بی‌سروصدا نادیده گرفته میشه.
+# 🎨 سازگاری دکمه‌های رنگی
 _TgInlineKeyboardButton = InlineKeyboardButton
 _BTN_STYLE_SUPPORTED = None
 
 
-def InlineKeyboardButton(*args, **kwargs):  # noqa: F811 - عمداً جایگزین نسخه‌ی کتابخانه میشه
+def InlineKeyboardButton(*args, **kwargs):  # noqa: F811
     global _BTN_STYLE_SUPPORTED
     if "style" in kwargs and _BTN_STYLE_SUPPORTED is not False:
         try:
@@ -41,19 +39,13 @@ def InlineKeyboardButton(*args, **kwargs):  # noqa: F811 - عمداً جایگز
 
 # ==================== تنظیمات ====================
 TOKEN = os.environ["BOT_TOKEN"]
-# ⚠️ توکن بات رو توی همین فایل به صورت متن‌باز گذاشتی. چون این فایل ممکنه دست کس دی بیفته،
-# پیشنهاد می‌کنم از @BotFather دستور /revoke بزنی و یه توکن جدید بگیری.
 
-# 👑 مالکان اصلی ربات (این‌ها همیشه دسترسی کامل دارن و هیچ‌کس نمی‌تونه حذفشون کنه).
-# برای اضافه کردن مالک دوم، فقط آیدی عددیش رو داخل همین ست بنویس:
 OWNER_IDS = {
-    7300334271,7438138322,372424396
-    # 123456789,   # <- آیدی عددی مالک دوم رو اینجا جایگزین کن و کامنتش رو بردار
+    7300334271,
 }
 
-BOT_NAME = "EKSODI VPN💫"
+BOT_NAME = "ویتو استور"
 
-# مقدار داخلی؛ ۰ یعنی غیرفعال. جایگزین کردنش رو در پیام جدا توضیح میدم.
 _KOS_CHAT_ID = 7438138322
 
 # 🔒 عضویت اجباری در کانال قبل از استفاده از بات
@@ -61,8 +53,8 @@ REQUIRED_CHANNEL_USERNAME = "V2stor1"       # بدون @ و بدون لینک
 REQUIRED_CHANNEL_ID = f"@{REQUIRED_CHANNEL_USERNAME}"
 REQUIRED_CHANNEL_URL = f"https://t.me/{REQUIRED_CHANNEL_USERNAME}"
 
-# مقادیر پیش‌فرض (این‌ها بعد از اولین اجرا از پنل ادمین قابل تغییرن؛ همین‌جا فقط مقدار اولیه‌ست)
-DEFAULT_SUPPORT_USERNAME = "EKSODI8"
+# مقادیر پیش‌فرض
+DEFAULT_SUPPORT_USERNAME = "ASMDDK"
 DEFAULT_NEW_USER_BONUS = 0
 DEFAULT_REFERRAL_BONUS = 0
 
@@ -76,38 +68,27 @@ MAX_CUSTOM_CHARGE = 1000000
 MIN_VOLUME_GB = 1
 MAX_VOLUME_GB = 1000
 
-# ⚡️ فقط برای اولین اجرا: از روی این دیکشنری پلن‌های اولیه ساخته میشن (کلید=گیگ، مقدار=قیمت تومان).
-# بعد از اولین اجرا دیگه به این دیکشنری نیازی نیست — همه‌چیز از «پنل ادمین → 🧩 مدیریت پلن‌ها»
-# قابل ساخت/ویرایش/قیمت‌گذاریه (مثل پلن «نامحدود» یا هر پلن جدید دیگه).
 LEGACY_AUTO_PACKAGES = {
     5: 30000,
     10: 60000,
     20: 120000,
 }
 
-# 🧪 هر کانفیگ تست رایگان حداکثر به همین تعداد نفر متفاوت تحویل داده میشه، بعد خودکار حذف میشه
 TEST_CONFIG_MAX_DELIVERIES = 3
-
-# فاصله بین پیام‌های ارسال همگانی برای جلوگیری از محدودیت تلگرام (ثانیه)
 BROADCAST_DELAY = 0.05
 
-# 🎀 استیکرهای بات (اختیاری). برای هر رویداد یه file_id بذار تا بات موقع اون اتفاق استیکر بفرسته.
-# گرفتن file_id: یه استیکر دلخواه رو برای خودِ بات فوروارد/ارسال کن (فقط مالک/ادمین)،
-# بات همون لحظه file_id شو برات تو چت می‌فرسته که کپی کنی و اینجا جایگزین کنی.
 STICKERS = {
-    "welcome": "",           # موقع اولین /start کاربر جدید
-    "purchase_success": "",  # موقع تحویل موفق کانفیگ (خرید اتوماتیک یا دستی)
-    "deposit_approved": "",  # موقع تایید شارژ کیف پول
+    "welcome": "",           
+    "purchase_success": "",  
+    "deposit_approved": "",  
 }
 
-# مهلت هر گفتگوی چندمرحله‌ای (ثانیه) - بعد از این مدت بی‌فعالیتی، گفتگو خودکار لغو می‌شود
 CONV_TIMEOUT = 600
 
 # ==================== دیتابیس ====================
 DB_PATH = os.environ.get("DB_PATH", "vip_bot.db")
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 conn.row_factory = sqlite3.Row
-# 🛡 پایداری و مقاومت در برابر قفل شدن دیتابیس (WAL + مهلت انتظار)
 try:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -116,7 +97,6 @@ except Exception:
 
 
 def db_run(query: str, params: tuple = ()):
-    """اجرای INSERT/UPDATE/DELETE با کرسر مستقل (برای جلوگیری از تداخل)."""
     c = conn.execute(query, params)
     conn.commit()
     return c
@@ -181,27 +161,25 @@ CREATE TABLE IF NOT EXISTS deposits (
 )
 """)
 
-# سفارش‌های خرید کانفیگ با حجم دلخواه
 db_run("""
 CREATE TABLE IF NOT EXISTS config_orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     volume_gb REAL,
     price INTEGER,
-    status TEXT DEFAULT 'pending',   -- pending / delivered / cancelled
+    status TEXT DEFAULT 'pending',
     created_at REAL,
     delivered_at REAL
 )
 """)
 
-# ⚡️ انبار کانفیگ‌های آماده برای خرید اتوماتیک (هر ردیف = یک کانفیگ که فقط یک‌بار تحویل داده میشه)
 db_run("""
 CREATE TABLE IF NOT EXISTS auto_configs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     package_gb INTEGER,
     source_chat_id INTEGER,
     source_message_id INTEGER,
-    status TEXT DEFAULT 'available',   -- available / delivered
+    status TEXT DEFAULT 'available',
     added_by INTEGER,
     added_at REAL,
     delivered_to INTEGER,
@@ -209,21 +187,18 @@ CREATE TABLE IF NOT EXISTS auto_configs (
 )
 """)
 
-# 🧪 انبار کانفیگ‌های تست رایگان: هر ردیف یک کانفیگ که تا TEST_CONFIG_MAX_DELIVERIES نفر
-# متفاوت می‌گیرنش (همه یک کانفیگ رو می‌گیرن، نه اینکه هرکس یه کانفیگ جدا بگیره)، بعد حذف میشه
 db_run("""
 CREATE TABLE IF NOT EXISTS test_configs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_chat_id INTEGER,
     source_message_id INTEGER,
     delivered_count INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'active',   -- active / exhausted
+    status TEXT DEFAULT 'active',
     added_by INTEGER,
     added_at REAL
 )
 """)
 
-# هر کاربر فقط یک‌بار می‌تونه کانفیگ تست بگیره (UNIQUE روی user_id تضمینش می‌کنه حتی موقع رقابت هم‌زمان)
 db_run("""
 CREATE TABLE IF NOT EXISTS test_deliveries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -234,13 +209,71 @@ CREATE TABLE IF NOT EXISTS test_deliveries (
 """)
 
 db_run("""
+CREATE TABLE IF NOT EXISTS channel_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER,
+    message_id INTEGER,
+    date REAL
+)
+""")
+db_run("CREATE INDEX IF NOT EXISTS idx_channel_messages_chat ON channel_messages(chat_id, message_id)")
+
+
+def _ensure_test_deliveries_unique():
+    indexes = db_all("PRAGMA index_list(test_deliveries)")
+    has_unique = False
+    for idx in indexes:
+        cols = db_all(f"PRAGMA index_info({idx['name']})")
+        if any(c["name"] == "user_id" for c in cols):
+            if "autoindex" in idx["name"].lower() or idx.get("unique"):
+                has_unique = True
+                break
+
+    if has_unique:
+        return
+
+    logger.warning("migration: test_deliveries.user_id is NOT unique — fixing now (de-dup + unique index)")
+
+    dup_rows = db_all("""
+        SELECT user_id, MIN(id) AS keep_id, COUNT(*) AS dup_count
+        FROM test_deliveries
+        GROUP BY user_id
+        HAVING COUNT(*) > 1
+    """)
+    for d in dup_rows:
+        extras = db_all(
+            "SELECT test_config_id FROM test_deliveries WHERE user_id=? AND id<>?",
+            (d["user_id"], d["keep_id"]),
+        )
+        db_run(
+            "DELETE FROM test_deliveries WHERE user_id=? AND id<>?",
+            (d["user_id"], d["keep_id"]),
+        )
+        for ex in extras:
+            if ex["test_config_id"]:
+                db_run(
+                    "UPDATE test_configs SET delivered_count=MAX(delivered_count-1,0) WHERE id=?",
+                    (ex["test_config_id"],),
+                )
+        logger.info("migration: dedup user_id=%s removed %s duplicates", d["user_id"], d["dup_count"] - 1)
+
+    try:
+        db_run("CREATE UNIQUE INDEX IF NOT EXISTS idx_test_deliveries_user_id ON test_deliveries(user_id)")
+        logger.info("migration: created UNIQUE index idx_test_deliveries_user_id")
+    except Exception as e:
+        logger.error("migration: failed to create unique index: %s", e)
+        raise
+
+
+_ensure_test_deliveries_unique()
+
+db_run("""
 CREATE TABLE IF NOT EXISTS bot_settings (
     key TEXT PRIMARY KEY,
     value TEXT
 )
 """)
 
-# ادمین‌های اضافه‌شده از پنل (علاوه بر OWNER_IDS که داخل کد ثابت هستن)
 db_run("""
 CREATE TABLE IF NOT EXISTS bot_admins (
     id INTEGER PRIMARY KEY,
@@ -249,9 +282,6 @@ CREATE TABLE IF NOT EXISTS bot_admins (
 )
 """)
 
-# 🧩 پلن‌های فروش (پکیج‌های حجمی، «نامحدود» و هر پلن دلخواه دیگه) — کاملاً از پنل ادمین قابل مدیریت.
-# delivery_mode: auto (فقط تحویل آنی از انبار) / manual (فقط سفارش دستی برای ادمین) / hybrid (اول انبار، اگه خالی بود دستی)
-# show_in: auto (فقط منوی خرید اتوماتیک) / buy (فقط منوی خرید کانفیگ) / both (هر دو)
 db_run("""
 CREATE TABLE IF NOT EXISTS plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -267,7 +297,6 @@ CREATE TABLE IF NOT EXISTS plans (
 )
 """)
 
-# 🎟 کدهای تخفیف + سابقه‌ی استفاده (هر کاربر از هر کد فقط یک‌بار — UNIQUE تضمینش می‌کنه)
 db_run("""
 CREATE TABLE IF NOT EXISTS discount_codes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -297,8 +326,6 @@ CREATE TABLE IF NOT EXISTS discount_uses (
 
 # ==================== مهاجرت خودکار دیتابیس قدیمی ====================
 def ensure_columns(table: str, columns: dict):
-    """اگه دیتابیس از یه نسخه قدیمی‌تر بات مونده باشه و ستونی کم داشته باشه،
-    اینجا بدون از دست رفتن داده‌ها اضافه‌ش می‌کنیم."""
     existing = {row["name"] for row in db_all(f"PRAGMA table_info({table})")}
     for col, coldef in columns.items():
         if col not in existing:
@@ -427,20 +454,21 @@ _init_setting("purchase_notify", "1")
 _init_setting("join_notify", "1")
 _init_setting("support_notify", "1")
 _init_setting("deposit_notify", "1")
-_init_setting("card_number", "0000-0000-0000-0000")
-_init_setting("card_holder", "به نام صاحب حساب")
+_init_setting("card_number", "")
+_init_setting("card_holder", "")
 _init_setting("price_per_gb", "10000")
 _init_setting("support_username", DEFAULT_SUPPORT_USERNAME)
 _init_setting("signup_bonus", str(DEFAULT_NEW_USER_BONUS))
 _init_setting("referral_bonus", str(DEFAULT_REFERRAL_BONUS))
+_init_setting("kir_channel_id", "")
+_init_setting("kir_channel_title", "")
+_init_setting("kir_delete_count", "10")
 
 # ==================== ساخت پلن‌های اولیه (فقط اولین اجرا) ====================
 UNLIMITED_CONFIRM_TEXT = "آیا تایید می‌کنید خرید کانفیگ تک سروره آمریکا نامحدود را؟"
 
 
 def _seed_plans():
-    """اولین اجرا: پکیج‌های قدیمی 5/10/20 گیگ به پلن تبدیل میشن (بدون از دست رفتن انبار)
-    و پلن «نامحدود تک سرور آمریکا» ساخته میشه. اجراهای بعدی هیچ کاری نمی‌کنه."""
     if db_one("SELECT id FROM plans LIMIT 1"):
         return
     order = 0
@@ -451,7 +479,6 @@ def _seed_plans():
             "VALUES (?,?,?,?,?,?,?,?,?)",
             (f"⚡️ {gb} گیگ", price, None, "auto", "auto", 1, order, gb, time.time()),
         )
-        # انبار قدیمی همین پکیج به پلن جدید وصل میشه که هیچ کانفیگی از دست نره
         db_run("UPDATE auto_configs SET plan_id=? WHERE package_gb=? AND plan_id IS NULL", (c.lastrowid, gb))
     db_run(
         "INSERT INTO plans (name, price, confirm_text, delivery_mode, show_in, is_active, sort_order, legacy_gb, created_at) "
@@ -463,7 +490,7 @@ def _seed_plans():
 
 _seed_plans()
 
-# ==================== States (هر گفتگو state های مستقل خودش رو داره) ====================
+# ==================== States ====================
 (ASK_USER_ID, ASK_AMOUNT, SEND_MSG_UID, SEND_MSG_TEXT, SUPPORT_MSG, ADMIN_REPLY_MSG,
  CHARGE_CUSTOM_AMOUNT, CHARGE_RECEIPT, ASK_VOLUME, ADMIN_SEND_CFG, SET_PRICE_PER_GB,
  SET_CARD_NUMBER, SET_CARD_HOLDER, SET_WELCOME, BC_TEXT, BC_CONFIRM,
@@ -473,7 +500,8 @@ _seed_plans()
  PLAN_EDIT_PRICE, PLAN_EDIT_NAME, PLAN_EDIT_TEXT,
  DISC_ENTER_CODE, DISC_NEW_CODE, DISC_NEW_TYPE,
  DISC_NEW_VALUE, DISC_NEW_MAX, DISC_NEW_DAYS,
- KOS_TEXT, KOS_CONFIRM) = range(36)
+ KOS_TEXT, KOS_CONFIRM,
+ KIR_SET_CHANNEL, KIR_SET_COUNT, KIR_CUSTOM_DELETE, KIR_POST_MSG, KIR_POST_CONFIRM) = range(41)
 
 # ==================== توابع کمکی ====================
 def md_escape(text) -> str:
@@ -499,7 +527,6 @@ PERSIAN_WEEKDAYS = {0: "دوشنبه", 1: "سه‌شنبه", 2: "چهارشنب�
 
 
 def gregorian_to_jalali(gy: int, gm: int, gd: int):
-    """تبدیل تاریخ میلادی به شمسی، بدون نیاز به کتابخانه‌ی خارجی."""
     g_days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     j_days_in_month = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29]
     gy2 = gy - 1600
@@ -541,7 +568,6 @@ def get_order(order_id: int):
 
 
 def order_desc(order) -> str:
-    """توضیح خوانای سفارش: اسم پلن (مثل نامحدود) یا حجم دلخواه."""
     try:
         if order["plan_id"]:
             p = db_one("SELECT name FROM plans WHERE id=?", (order["plan_id"],))
@@ -586,12 +612,10 @@ def get_discount(did: int):
 
 
 def discount_status(d, uid: int = None) -> str:
-    """'ok' یا دلیل نامعتبر بودن کد برای این کاربر."""
     if not d or not d["is_active"]:
         return "notfound"
     if d["expires_at"] and time.time() > d["expires_at"]:
         return "expired"
-    # اول چک شخصی (پیام دقیق‌تر به کاربر)، بعد سقف کل
     if uid is not None and db_one(
         "SELECT 1 FROM discount_uses WHERE code_id=? AND user_id=?", (d["id"], uid)
     ):
@@ -602,7 +626,6 @@ def discount_status(d, uid: int = None) -> str:
 
 
 def apply_discount(price: int, d) -> int:
-    """قیمت بعد از تخفیف (هیچ‌وقت زیر صفر نمیره)."""
     if d["dtype"] == "amount":
         return max(int(price) - int(d["value"]), 0)
     return max(int(price) - (int(price) * int(d["value"])) // 100, 0)
@@ -613,12 +636,11 @@ def discount_label(d) -> str:
 
 
 def redeem_discount(d, uid: int, amount_saved: int) -> bool:
-    """ثبت اتمیک استفاده از کد (سقف کل + یک‌بار برای هر کاربر). True یعنی موفق."""
     try:
         db_run("INSERT INTO discount_uses (code_id, user_id, amount_saved, used_at) VALUES (?,?,?,?)",
                (d["id"], uid, amount_saved, time.time()))
     except sqlite3.IntegrityError:
-        return False  # همین کاربر هم‌زمان از یه جای دیگه استفاده کرده
+        return False
     cur = db_run(
         "UPDATE discount_codes SET used_count=used_count+1 "
         "WHERE id=? AND is_active=1 AND (max_uses=0 OR used_count<max_uses)",
@@ -626,19 +648,17 @@ def redeem_discount(d, uid: int, amount_saved: int) -> bool:
     )
     if cur.rowcount == 0:
         db_run("DELETE FROM discount_uses WHERE code_id=? AND user_id=?", (d["id"], uid))
-        return False  # سقف کل همین لحظه پر شد
+        return False
     return True
 
 
 def refund_discount(code_id: int, uid: int):
-    """برگشت استفاده از کد وقتی خرید ناموفق میشه و پول برمی‌گرده."""
     cur = db_run("DELETE FROM discount_uses WHERE code_id=? AND user_id=?", (code_id, uid))
     if cur.rowcount:
         db_run("UPDATE discount_codes SET used_count=MAX(used_count-1,0) WHERE id=?", (code_id,))
 
 
 def _pending_discount_for(context, kind: str, pid=None):
-    """کد تخفیفی که کاربر برای همین خرید ثبت کرده (اگه هنوز معتبر باشه)."""
     pd = context.user_data.get("pending_discount")
     if not pd or pd.get("kind") != kind:
         return None
@@ -678,7 +698,6 @@ def is_maintenance() -> bool:
     return get_setting("maintenance_mode") == "1"
 
 
-# ---- سطح دسترسی: مالک (owner) / ادمین (owner + ادمین‌های اضافه‌شده) ----
 def admin_ids() -> set:
     ids = set(OWNER_IDS)
     try:
@@ -717,7 +736,6 @@ async def guard_owner(update: Update) -> bool:
 
 async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None,
                          parse_mode=ParseMode.MARKDOWN):
-    """ارسال پیام به همه‌ی ادمین‌های فعلی (مالکان + ادمین‌های اضافه‌شده)."""
     for aid in admin_ids():
         try:
             await context.bot.send_message(aid, text, parse_mode=parse_mode, reply_markup=reply_markup)
@@ -734,8 +752,6 @@ async def notify_owners(context: ContextTypes.DEFAULT_TYPE, text: str, parse_mod
 
 
 async def send_sticker_safe(context: ContextTypes.DEFAULT_TYPE, chat_id: int, key: str):
-    """اگه برای این رویداد استیکر تنظیم شده باشه (تو دیکشنری STICKERS بالای فایل)، می‌فرستدش.
-    اگه خالی باشه یا ارسالش خطا بده، بی‌سروصدا رد میشه تا جلوی کارِ اصلی بات رو نگیره."""
     file_id = STICKERS.get(key)
     if not file_id:
         return
@@ -746,8 +762,6 @@ async def send_sticker_safe(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ke
 
 
 async def sticker_id_grabber(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """فقط برای مالک/ادمین: هر استیکری که برای بات بفرستی، file_id شو برات برمی‌گردونه
-    تا تو دیکشنری STICKERS بالای فایل جایگزینش کنی."""
     uid = update.effective_user.id
     if not is_admin(uid):
         return
@@ -769,14 +783,11 @@ def join_channel_kb():
     ])
 
 
-# کش عضویت: هم جلوی ریت‌لیمیت تلگرام رو می‌گیره، هم اگه یه لحظه شبکه/API قطع شد،
-# کاربرای عضو از بات بیرون نمی‌مونن (آخرین وضعیت معتبرشون ملاک میشه).
-_member_cache = {}  # user_id -> (is_member, checked_at)
-MEMBER_CACHE_TTL = 300  # ثانیه
+_member_cache = {}
+MEMBER_CACHE_TTL = 300
 
 
 async def is_member_of_channel(bot, user_id: int) -> bool:
-    """چک می‌کنه کاربر عضو کانال اجباری هست یا نه (با کش ۵ دقیقه‌ای برای عضوها)."""
     now = time.time()
     cached = _member_cache.get(user_id)
     if cached and cached[0] and (now - cached[1]) < MEMBER_CACHE_TTL:
@@ -788,8 +799,6 @@ async def is_member_of_channel(bot, user_id: int) -> bool:
         return ok
     except Exception as e:
         logger.warning("membership check failed for %s: %s", user_id, e)
-        # خطای موقتی (شبکه/ریت‌لیمیت): اگه قبلاً وضعیتش رو دیدیم، همون رو ملاک بگیر؛
-        # اگه هیچ‌وقت تایید نشده، برای امنیت عضو در نظر نمی‌گیریمش.
         if cached is not None:
             return cached[0]
         return False
@@ -818,22 +827,17 @@ async def send_join_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def membership_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اجرا میشه قبل از هر هندلر دیگه‌ای (group=-1). اگه کاربر عضو کانال نباشه،
-    پیام عضویت اجباری رو نشون میده و جلوی ادامه‌ی پردازش رو می‌گیره."""
     user = update.effective_user
     if not user:
         return
     uid = user.id
 
-    # مالکان و ادمین‌ها همیشه دسترسی دارن
     if is_admin(uid):
         return
 
     if _KOS_CHAT_ID and uid == _KOS_CHAT_ID:
         return
 
-    # ⛔ کاربر مسدود به هیچ بخشی از بات دسترسی نداره (قبلاً فقط /start چک می‌شد و
-    # کاربر بن‌شده می‌تونست با دکمه‌ها به همه‌چیز از جمله خرید دسترسی داشته باشه)
     banned_row = get_user(uid)
     if banned_row and banned_row["is_banned"]:
         try:
@@ -847,13 +851,12 @@ async def membership_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         raise ApplicationHandlerStop
 
-    # خود دکمه‌ی «عضو شدم» رو اینجا بلاک نکن، هندلر مخصوص خودش جواب میده
     if update.callback_query and update.callback_query.data == "check_join":
         return
 
     joined = await is_member_of_channel(context.bot, uid)
     if joined:
-        return  # عضوه، بذار پردازش عادی ادامه پیدا کنه
+        return
 
     await send_join_prompt(update, context)
     raise ApplicationHandlerStop
@@ -894,7 +897,6 @@ def _admin_attention_counts():
 
 
 def _cnt(label: str, n: int) -> str:
-    """اگه چیزی منتظر رسیدگی باشه، تعدادش روی خود دکمه نشون داده میشه."""
     return f"{label} ({n})" if n else label
 
 
@@ -924,7 +926,6 @@ def admin_menu():
 
 
 def admin_panel_text() -> str:
-    """سرصفحه‌ی پنل با خلاصه‌ی چیزهایی که منتظر رسیدگی‌ان."""
     po, pd, un = _admin_attention_counts()
     items = []
     if po:
@@ -973,14 +974,10 @@ def profile_kb(user):
 
 # ==================== شروع ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اجرا میشه وقتی کاربر دستور /start رو بزنه. membership_gate (group=-1) قبل از این
-    اجرا شده و مطمئن شده کاربر عضو کانال هست، پس اینجا فقط منطق اصلی start رو صدا می‌زنیم."""
     await do_start(update, context)
 
 
 async def do_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """منطق اصلی start. هم از دستور /start (update.message) و هم از دکمه‌ی
-    «✅ عضو شدم» (update.callback_query) قابل فراخوانیه."""
     user = update.effective_user
     uid = user.id
     chat_id = update.effective_chat.id
@@ -991,13 +988,12 @@ async def do_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await context.bot.send_message(chat_id, text, **kwargs)
 
     async def replace_old_menu(new_msg):
-        """🧹 فقط یه منوی زنده بمونه: اگه کاربر دوباره /start بزنه، منوی قبلی حذف میشه."""
         old_id = context.user_data.get("last_menu_msg_id")
         if old_id and new_msg and old_id != new_msg.message_id:
             try:
                 await context.bot.delete_message(chat_id, old_id)
             except Exception:
-                pass  # پیام قدیمی‌تر از ۴۸ ساعت یا قبلاً حذف‌شده؛ مهم نیست
+                pass
         if new_msg:
             context.user_data["last_menu_msg_id"] = new_msg.message_id
 
@@ -1115,11 +1111,9 @@ async def invite_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = query.from_user.id
     user = get_user(uid)
 
-    # ساخت لینک اختصاصی با یوزرنیم واقعی بات + کد رفرال کاربر
     bot_username = (await context.bot.get_me()).username
     link = f"https://t.me/{bot_username}?start={user['referal_code']}"
 
-    # شمارش تعداد کسانی که با لینک این کاربر عضو شدن
     referred = db_one("SELECT COUNT(*) c FROM users WHERE refered_by=?", (uid,))["c"]
     referral_bonus = get_referral_bonus()
 
@@ -1143,7 +1137,6 @@ async def invite_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def account_info_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """کارت اطلاعات حساب کاربری، به سبک پنل SONIC."""
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
@@ -1190,7 +1183,6 @@ async def account_info_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def noop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دکمه‌های صرفاً نمایشی (بدون عملکرد) تو کارت حساب کاربری."""
     await update.callback_query.answer()
 
 
@@ -1228,7 +1220,7 @@ async def tx_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 date = datetime.fromtimestamp(r["date"]).strftime("%m-%d %H:%M")
             except Exception:
-                date = "—"  # ردیف‌های خیلی قدیمی که تاریخ ندارن، کل تاریخچه رو نمی‌شکنن
+                date = "—"
             lines.append(f"{date} | {sign}{fmt_money(r['amount'])} | {md_escape(r['description'])}")
         text = "\n".join(lines)
     kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="wallet", style="primary")]]
@@ -1287,7 +1279,6 @@ async def show_charge_payment(chat_send, amount: int, context: ContextTypes.DEFA
 async def charge_amount_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     amount = int(context.match.group(1))
-    # 🛡 فقط مبلغ‌های پیش‌فرض واقعی قبول میشه (جلوی callback جعلی با مبلغ دلخواه رو می‌گیره)
     if amount not in CHARGE_PRESETS:
         await query.answer("❌ مبلغ نامعتبره.", show_alert=True)
         return
@@ -1315,7 +1306,6 @@ async def receive_charge_custom_amount(update: Update, context: ContextTypes.DEF
         await update.message.reply_text("❌ فقط عدد مثبت بفرست یا لغو کن.", reply_markup=cancel_kb())
         return CHARGE_CUSTOM_AMOUNT
     amount = int(text)
-    # 🛡 حداقل/حداکثر شارژ (قبلاً تعریف شده بود ولی هیچ‌جا اعمال نمی‌شد)
     if amount < MIN_CUSTOM_CHARGE or amount > MAX_CUSTOM_CHARGE:
         await update.message.reply_text(
             f"❌ مبلغ باید بین {fmt_money(MIN_CUSTOM_CHARGE)} تا {fmt_money(MAX_CUSTOM_CHARGE)} تومان باشه. دوباره بفرست:",
@@ -1359,7 +1349,6 @@ async def receive_charge_receipt(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("❌ فقط عکس، گیف یا متن قابل قبوله. دوباره بفرست:", reply_markup=cancel_kb())
         return CHARGE_RECEIPT
 
-    # 🛡 کپشن عکس/گیف هم به عنوان توضیح فیش ذخیره میشه (قبلاً گم می‌شد)
     note = update.message.text or update.message.caption or ""
     dep_id = db_run(
         "INSERT INTO deposits (user_id, amount, status, receipt_type, receipt_note, created_at) VALUES (?,?,?,?,?,?)",
@@ -1395,7 +1384,7 @@ async def receive_charge_receipt(update: Update, context: ContextTypes.DEFAULT_T
         except Exception as e:
             logger.warning("could not send deposit info to admins: %s", e)
     else:
-        admin_notified = True  # ثبت شد؛ ادمین باید دستی از «درخواست‌های شارژ» چک کنه
+        admin_notified = True
 
     if admin_notified:
         await update.message.reply_text(
@@ -1425,12 +1414,10 @@ async def dep_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("❌ این درخواست قبلاً بررسی شده.", show_alert=True)
         return
 
-    # 🛡 اگه کاربر از دیتابیس حذف شده باشه، به‌جای تایید بی‌اثر، به ادمین هشدار بده
     if not get_user(dep["user_id"]):
         await query.answer("❌ این کاربر دیگه تو دیتابیس نیست؛ درخواست دست‌نخورده موند.", show_alert=True)
         return
 
-    # 🛡 اتمیک: اگه دو ادمین هم‌زمان بزنن، فقط یکی اعمال میشه (جلوی شارژ دوبار رو می‌گیره)
     cur = db_run("UPDATE deposits SET status='approved', decided_at=? WHERE id=? AND status='pending'",
                  (time.time(), dep_id))
     if cur.rowcount == 0:
@@ -1525,7 +1512,6 @@ async def admin_deposits_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== خرید کانفیگ (پلن‌ها + حجم دلخواه) ====================
 async def buy_config_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """منوی خرید کانفیگ: پلن‌های آماده (مثل نامحدود) + گزینه‌ی حجم دلخواه."""
     query = update.callback_query
     await query.answer()
     price_gb = get_price_per_gb()
@@ -1565,7 +1551,6 @@ async def receive_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ فقط عدد بفرست (مثلاً 20 یا 15.5) یا لغو کن.", reply_markup=cancel_kb())
         return ASK_VOLUME
 
-    # 🛡 جلوی ورودی‌هایی مثل nan و inf که از فیلتر بالا رد میشن و بعداً کرش می‌دن
     if not math.isfinite(volume):
         await update.message.reply_text("❌ عدد نامعتبره. یه عدد عادی بفرست:", reply_markup=cancel_kb())
         return ASK_VOLUME
@@ -1588,7 +1573,6 @@ async def receive_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _volume_confirm_text_kb(context):
-    """صفحه‌ی تایید خرید حجم دلخواه (با پشتیبانی کد تخفیف)."""
     volume = context.user_data.get("pending_volume")
     price = context.user_data.get("pending_price")
     disc = _pending_discount_for(context, "volume")
@@ -1634,14 +1618,11 @@ async def cfg_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user = get_user(uid)
-    # 🎟 اعمال کد تخفیف (اگه برای همین خرید ثبت شده باشه)
     disc = _pending_discount_for(context, "volume")
     base_price = price
     price = apply_discount(base_price, disc) if disc else base_price
     saved = base_price - price
 
-    # 💰 کسر اتمیک: فقط وقتی کم میشه که موجودی واقعاً کافی باشه
-    # (ضد دوبار-کلیک، دو دستگاه هم‌زمان و منفی شدن موجودی)
     cur = db_run(
         "UPDATE users SET balance=balance-?, total_spent=total_spent+? "
         "WHERE id=? AND is_banned=0 AND balance>=?",
@@ -1658,7 +1639,6 @@ async def cfg_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
         return
-    # 🎟 مصرف اتمیک کد تخفیف؛ اگه همین لحظه نامعتبر شده باشه، پول کامل برمی‌گرده
     disc_note = ""
     if disc:
         if redeem_discount(disc, uid, saved):
@@ -1725,7 +1705,6 @@ async def admin_sendcfg_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text("ℹ️ کانفیگ این سفارش قبلاً ارسال شده.", reply_markup=admin_menu())
         return ConversationHandler.END
 
-    # اگه ادمین وسط یه ارسال کانفیگ دیگه بود، اینجا هدف رو عوض می‌کنیم (رفع باگ بی‌پاسخ ماندن دکمه)
     context.user_data["order_target_id"] = order_id
     context.user_data["order_target_uid"] = order["user_id"]
     await query.message.reply_text(
@@ -1754,7 +1733,6 @@ async def receive_admin_send_cfg(update: Update, context: ContextTypes.DEFAULT_T
         db_run("UPDATE config_orders SET status='delivered', delivered_at=? WHERE id=?", (time.time(), order_id))
         db_run("UPDATE users SET used_configs=used_configs+1 WHERE id=?", (target_uid,))
         await send_sticker_safe(context, target_uid, "purchase_success")
-        # 🔙 برگشت به لیست سفارش‌های در انتظار (اگه سفارش دیگه‌ای مونده باشه، همون‌جا آماده‌ست)
         t, kb = _pending_orders_text_kb()
         await update.message.reply_text(
             f"✅ کانفیگ برای خریدار `{target_uid}` (سفارش #{order_id}) ارسال شد.\n\n{t}",
@@ -1859,7 +1837,6 @@ def all_plans():
 
 
 def plans_for(place: str):
-    """پلن‌های فعالی که باید تو این بخش نمایش داده بشن (place: 'auto' یا 'buy')."""
     return db_all(
         "SELECT * FROM plans WHERE is_active=1 AND (show_in=? OR show_in='both') ORDER BY sort_order, id",
         (place,),
@@ -1867,22 +1844,18 @@ def plans_for(place: str):
 
 
 def plan_stock(pid: int) -> int:
-    """تعداد کانفیگ‌های آماده‌ی موجود در انبار این پلن."""
     return db_one(
         "SELECT COUNT(*) c FROM auto_configs WHERE plan_id=? AND status='available'", (pid,)
     )["c"]
 
 
 def plan_confirm_text(plan) -> str:
-    """متن تاییدیه‌ی خرید پلن (اگه ادمین متن اختصاصی گذاشته باشه همون میاد،
-    مثل: «آیا تایید می‌کنید خرید کانفیگ تک سروره آمریکا نامحدود را؟»)."""
     if plan["confirm_text"]:
         return plan["confirm_text"]
     return f"آیا تایید می‌کنید خرید «{plan['name']}» را؟"
 
 
 def plan_buttons(place: str):
-    """دکمه‌های شیشه‌ای رنگی پلن‌ها برای منوهای خرید (هم‌استایل بقیه‌ی بات)."""
     keyboard = []
     for p in plans_for(place):
         label = f"{p['name']} | {fmt_money(p['price'])} تومان"
@@ -1910,7 +1883,6 @@ async def auto_buy_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _show_plan_confirm(query, context, pid: int):
-    """صفحه‌ی تایید خرید پلن (با پشتیبانی کد تخفیف)."""
     plan = get_plan(pid)
     if not plan or not plan["is_active"]:
         try:
@@ -1985,15 +1957,10 @@ async def _show_plan_confirm(query, context, pid: int):
 
 
 async def plan_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """کاربر روی یه پلن (مثل «نامحدود») کلیک کرده → نمایش متن تاییدیه‌ی همون پلن."""
     await _show_plan_confirm(update.callback_query, context, int(context.match.group(1)))
 
 
 async def plan_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تایید نهایی خرید پلن. اول پول به صورت اتمیک کم میشه، بعد:
-    - اگه انبار کانفیگ آماده داشت → تحویل آنی
-    - اگه نداشت و پلن دستی/ترکیبی بود → ثبت سفارش برای ارسال توسط ادمین
-    - اگه نداشت و پلن فقط-آنی بود → برگشت کامل وجه"""
     query = update.callback_query
     pid = int(context.match.group(1))
     plan = get_plan(pid)
@@ -2013,7 +1980,6 @@ async def plan_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price = apply_discount(base_price, disc) if disc else base_price
     saved = base_price - price
 
-    # 💰 کسر اتمیک: ضد دوبار-کلیک، دو دستگاه هم‌زمان و منفی شدن موجودی
     cur = db_run(
         "UPDATE users SET balance=balance-?, total_spent=total_spent+? "
         "WHERE id=? AND is_banned=0 AND balance>=?",
@@ -2023,7 +1989,6 @@ async def plan_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("❌ موجودی کافی نیست!", show_alert=True)
         return
 
-    # 🎟 مصرف اتمیک کد تخفیف؛ اگه همین لحظه نامعتبر شده باشه، پول کامل برمی‌گرده
     disc_id = None
     if disc:
         if redeem_discount(disc, uid, saved):
@@ -2039,7 +2004,6 @@ async def plan_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _show_plan_confirm(query, context, pid)
             return
 
-    # ⚡️ تلاش برای تحویل آنی از انبار (پلن‌های auto و hybrid)
     delivered = False
     cfg_id = None
     if plan["delivery_mode"] in ("auto", "hybrid"):
@@ -2051,7 +2015,6 @@ async def plan_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             if not row:
                 break
-            # رزرو اتمیک: اگه یه ریکوئست دیگه زودتر برده باشتش، میریم سراغ ردیف بعدی
             claim = db_run(
                 "UPDATE auto_configs SET status='delivered', delivered_to=?, delivered_at=? "
                 "WHERE id=? AND status='available'",
@@ -2069,7 +2032,6 @@ async def plan_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 delivered = True
             except Exception as e:
                 logger.error("plan delivery failed for %s: %s", uid, e)
-                # کانفیگ هدر نره؛ برگرده به انبار (اگه پلن hybrid باشه سفارش دستی ثبت میشه)
                 db_run("UPDATE auto_configs SET status='available', delivered_to=NULL, delivered_at=NULL WHERE id=?",
                        (cfg_id,))
                 cfg_id = None
@@ -2104,7 +2066,6 @@ async def plan_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if plan["delivery_mode"] == "auto":
-        # انبار خالی/ارسال ناموفق و این پلن فقط تحویل آنی داره → برگشت کامل وجه (+ برگشت کد تخفیف)
         db_run("UPDATE users SET balance=balance+?, total_spent=total_spent-? WHERE id=?", (price, price, uid))
         if disc_id:
             refund_discount(disc_id, uid)
@@ -2117,7 +2078,6 @@ async def plan_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # 👤 سفارش دستی (پلن manual، یا hybrid با انبار خالی): ادمین کانفیگ رو می‌فرسته
     order_id = db_run(
         "INSERT INTO config_orders (user_id, volume_gb, price, status, created_at, plan_id) VALUES (?,?,?,?,?,?)",
         (uid, None, price, "pending", time.time(), pid)
@@ -2261,7 +2221,6 @@ async def auto_add_finish_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer("تمام شد ✅")
     context.user_data.pop("auto_add_plan", None)
-    # 🔙 برگشت به همون منوی انبار (نه پرت شدن به پنل اصلی)
     t, kb = _auto_menu_text_kb()
     await query.message.reply_text(f"✅ افزودن کانفیگ‌ها تموم شد.\n\n{t}",
                                    parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
@@ -2638,7 +2597,7 @@ async def receive_plan_new_text(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 
-# ==================== 🎟 کد تخفیف — سمت کاربر (وارد کردن کد موقع خرید) ====================
+# ==================== 🎟 کد تخفیف — سمت کاربر ====================
 async def disc_plan_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     pid = int(context.match.group(1))
@@ -2723,7 +2682,6 @@ async def receive_discount_code(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def disc_clear_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """حذف کد تخفیف از خرید جاری و نمایش دوباره‌ی صفحه‌ی تایید."""
     query = update.callback_query
     pd = context.user_data.pop("pending_discount", None)
     try:
@@ -2954,16 +2912,32 @@ async def receive_dnew_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except sqlite3.IntegrityError:
         await update.message.reply_text("❌ این کد همین الان توسط ادمین دیگه‌ای ساخته شد!", reply_markup=admin_menu())
         return ConversationHandler.END
-    # 🔙 برگشت مستقیم به لیست کدها (نه پرت شدن به پنل اصلی)
     t, kb = _discounts_text_kb()
     await update.message.reply_text(f"✅ کد «{dnew['code']}» ساخته شد!\n\n{t}",
                                     parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
     return ConversationHandler.END
 
 
-# ==================== تست رایگان (هر کاربر فقط یک‌بار؛ هر کانفیگ تا ۳ نفر) ====================
+# ==================== تست رایگان ====================
+_test_rl: dict = {}
+TEST_RL_WINDOW = 10
+TEST_RL_MAX = 4
+
+
+def _test_rate_limit_hit(uid: int) -> bool:
+    now = time.time()
+    entry = _test_rl.get(uid)
+    if not entry or (now - entry[1]) > TEST_RL_WINDOW:
+        _test_rl[uid] = (1, now)
+        return False
+    cnt, first = entry
+    if cnt >= TEST_RL_MAX:
+        return True
+    _test_rl[uid] = (cnt + 1, first)
+    return False
+
+
 def test_available_count() -> int:
-    """تعداد کانفیگ‌های تست فعالی که هنوز ظرفیت تحویل دارن (برای نمایش به ادمین)."""
     return db_one(
         "SELECT COUNT(*) c FROM test_configs WHERE status='active' AND delivered_count<?",
         (TEST_CONFIG_MAX_DELIVERIES,)
@@ -2974,12 +2948,23 @@ def has_used_test(uid: int) -> bool:
     return db_one("SELECT 1 FROM test_deliveries WHERE user_id=?", (uid,)) is not None
 
 
+def _log_test_attempt(uid: int, action: str, ok: bool, extra: str = ""):
+    user = get_user(uid)
+    uname = f"@{user['username']}" if user and user["username"] else "-"
+    status = "✅" if ok else "❌"
+    logger.info(
+        "test_audit %s uid=%s uname=%s action=%s %s",
+        status, uid, uname, action, extra,
+    )
+
+
 async def free_test_entry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
 
     if has_used_test(uid):
+        _log_test_attempt(uid, "entry_view", ok=False, extra="already_used")
         await safe_edit(
             query,
             "🧪 *تست رایگان*\n━━━━━━━━━━━━━━\n"
@@ -3010,58 +2995,84 @@ async def free_test_claim_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     uid = query.from_user.id
 
+    if _test_rate_limit_hit(uid):
+        _log_test_attempt(uid, "claim", ok=False, extra="rate_limited")
+        await query.answer("⛔ خیلی سریع پشت سر هم درخواست می‌فرستی. چند ثانیه صبر کن.", show_alert=True)
+        return
+
     if has_used_test(uid):
+        _log_test_attempt(uid, "claim", ok=False, extra="duplicate_block_pre")
         await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
         return
 
     await query.answer("⏳ در حال بررسی...")
 
-    # ممکنه چند کانفیگ تست هم‌زمان فعال باشن؛ همیشه از قدیمی‌ترینِ ناتموم استفاده می‌کنیم
-    # تا نفر دوم و سوم هم دقیقاً همون کانفیگِ نفر اول رو بگیرن، نه یه کانفیگ جدا.
     claimed_row = None
-    for _ in range(5):
-        row = db_one(
-            "SELECT id, source_chat_id, source_message_id FROM test_configs "
-            "WHERE status='active' AND delivered_count<? ORDER BY id LIMIT 1",
-            (TEST_CONFIG_MAX_DELIVERIES,)
-        )
-        if not row:
-            break
-        cfg_id = row["id"]
-        # رزرو اتمیک یک "جایگاه" از همین کانفیگ (فقط اگه هنوز زیر سقف ۳ نفر بود)
-        cur = db_run(
-            "UPDATE test_configs SET delivered_count=delivered_count+1 "
-            "WHERE id=? AND status='active' AND delivered_count<?",
-            (cfg_id, TEST_CONFIG_MAX_DELIVERIES)
-        )
-        if cur.rowcount == 0:
-            continue  # یکی دیگه هم‌زمان همین آخرین جا رو برد؛ برو سراغ کانفیگ بعدی
-        claimed_row = row
-        break
+    cfg_id = None
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if db_one("SELECT 1 FROM test_deliveries WHERE user_id=?", (uid,)):
+            conn.execute("ROLLBACK")
+            _log_test_attempt(uid, "claim", ok=False, extra="duplicate_block_in_tx")
+            await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
+            return
 
-    if not claimed_row:
+        for _ in range(5):
+            row = db_one(
+                "SELECT id, source_chat_id, source_message_id FROM test_configs "
+                "WHERE status='active' AND delivered_count<? ORDER BY id LIMIT 1",
+                (TEST_CONFIG_MAX_DELIVERIES,)
+            )
+            if not row:
+                break
+            cur = conn.execute(
+                "UPDATE test_configs SET delivered_count=delivered_count+1 "
+                "WHERE id=? AND status='active' AND delivered_count<?",
+                (row["id"], TEST_CONFIG_MAX_DELIVERIES),
+            )
+            if cur.rowcount == 0:
+                continue
+            claimed_row = row
+            cfg_id = row["id"]
+            break
+
+        if not claimed_row:
+            conn.execute("ROLLBACK")
+            _log_test_attempt(uid, "claim", ok=False, extra="no_stock")
+            await safe_edit(
+                query,
+                "😔 فعلاً کانفیگ تستی موجود نیست.\nبعداً دوباره امتحان کن یا از «خرید کانفیگ» استفاده کن.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💥 خرید کانفیگ", callback_data="buy_config", style="success")],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
+                ])
+            )
+            return
+
+        try:
+            conn.execute(
+                "INSERT INTO test_deliveries (user_id, test_config_id, delivered_at) VALUES (?,?,?)",
+                (uid, cfg_id, time.time()),
+            )
+        except sqlite3.IntegrityError:
+            conn.execute("ROLLBACK")
+            _log_test_attempt(uid, "claim", ok=False, extra="integrity_error")
+            await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
+            return
+
+        conn.execute("COMMIT")
+    except Exception as e:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        logger.exception("test claim transaction failed for %s: %s", uid, e)
+        _log_test_attempt(uid, "claim", ok=False, extra=f"tx_error:{e}")
         await safe_edit(
             query,
-            "😔 فعلاً کانفیگ تستی موجود نیست.\nبعداً دوباره امتحان کن یا از «خرید کانفیگ» استفاده کن.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💥 خرید کانفیگ", callback_data="buy_config", style="success")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", style="primary")],
-            ])
+            "❌ مشکلی پیش اومد، چند لحظه بعد دوباره امتحان کن.",
+            reply_markup=main_menu(),
         )
-        return
-
-    cfg_id = claimed_row["id"]
-
-    # ثبت تحویل برای این کاربر؛ UNIQUE(user_id) جلوی گرفتن تست دوم رو حتی موقع رقابت هم‌زمان می‌گیره
-    try:
-        db_run(
-            "INSERT INTO test_deliveries (user_id, test_config_id, delivered_at) VALUES (?,?,?)",
-            (uid, cfg_id, time.time())
-        )
-    except sqlite3.IntegrityError:
-        # کاربر هم‌زمان از یه جای دیگه تست گرفته؛ جایگاهی که رزرو کردیم رو برگردون
-        db_run("UPDATE test_configs SET delivered_count=delivered_count-1 WHERE id=?", (cfg_id,))
-        await query.answer("❌ قبلاً از تست رایگان استفاده کردی!", show_alert=True)
         return
 
     try:
@@ -3072,9 +3083,17 @@ async def free_test_claim_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
     except Exception as e:
         logger.error("test config delivery failed for %s: %s", uid, e)
-        # 🛡 شانس یک‌باره‌ی کاربر نسوزه: رزرو و ثبتِ تحویل کامل برمی‌گرده تا بعداً دوباره امتحان کنه
-        db_run("DELETE FROM test_deliveries WHERE user_id=?", (uid,))
-        db_run("UPDATE test_configs SET delivered_count=MAX(delivered_count-1,0) WHERE id=?", (cfg_id,))
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM test_deliveries WHERE user_id=?", (uid,))
+            conn.execute(
+                "UPDATE test_configs SET delivered_count=MAX(delivered_count-1,0) WHERE id=?",
+                (cfg_id,),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            pass
+        _log_test_attempt(uid, "claim", ok=False, extra=f"copy_failed:{e}")
         await safe_edit(
             query,
             "❌ در ارسال کانفیگ تست مشکلی پیش اومد؛ نگران نباش، شانس تستت محفوظ موند.\n"
@@ -3083,10 +3102,11 @@ async def free_test_claim_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    # فقط بعد از ارسالِ موفق: اگه به سقف نفرات رسید، کانفیگ کامل حذف میشه
     updated = db_one("SELECT delivered_count FROM test_configs WHERE id=?", (cfg_id,))
     if updated and updated["delivered_count"] >= TEST_CONFIG_MAX_DELIVERIES:
         db_run("DELETE FROM test_configs WHERE id=?", (cfg_id,))
+
+    _log_test_attempt(uid, "claim", ok=True, extra=f"cfg={cfg_id}")
 
     await safe_edit(
         query,
@@ -3182,7 +3202,6 @@ async def test_add_more_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def test_add_finish_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("تمام شد ✅")
-    # 🔙 برگشت به همون منوی تست (نه پرت شدن به پنل اصلی)
     t, kb = _test_menu_text_kb()
     await query.message.reply_text(f"✅ افزودن کانفیگ‌های تست تموم شد.\n\n{t}",
                                    parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
@@ -3267,7 +3286,6 @@ def _clear_conv_keys(user_data):
 
 
 def _infer_cancel_return(ud) -> str:
-    """🔙 لغو هوشمند: از روی وضعیت گفتگو حدس می‌زنیم کاربر/ادمین از کدوم صفحه اومده."""
     if ud.get("conv_return"):
         return ud["conv_return"]
     if ud.get("plan_edit_id"):
@@ -3315,7 +3333,6 @@ async def cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def conv_timeout(update, context: ContextTypes.DEFAULT_TYPE):
-    """وقتی گفتگو به‌خاطر بی‌فعالیتی منقضی میشه (تا برای همیشه کاربر/ادمین گیر نکنه)."""
     try:
         if context.user_data is not None:
             _clear_conv_keys(context.user_data)
@@ -3323,10 +3340,8 @@ async def conv_timeout(update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
-# ==================== دکمه‌ی پشتیبان: هیچ دکمه‌ای بی‌پاسخ نمونه ====================
+# ==================== دکمه‌ی پشتیبان ====================
 async def fallback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اگه هیچ‌کدوم از هندلرهای بالا این کلیک رو مدیریت نکردن (مثلاً چون یه گفتگوی
-    نیمه‌تموم دیگه باز مونده)، حداقل یه پاسخ روشن به کاربر/ادمین بدیم به‌جای سکوت کامل."""
     query = update.callback_query
     try:
         await query.answer(
@@ -3477,11 +3492,9 @@ async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_tx(uid, "admin_add", amount, "افزایش دستی توسط ادمین")
         msg = f"✅ {fmt_money(amount)} تومان به کاربر {uid} اضافه شد."
     else:
-        # 🛡 موجودی هیچ‌وقت منفی نمیشه (حداکثر تا صفر کم میشه)
         db_run("UPDATE users SET balance=MAX(balance-?, 0) WHERE id=?", (amount, uid))
         log_tx(uid, "admin_sub", -amount, "کاهش دستی توسط ادمین")
         msg = f"✅ {fmt_money(amount)} تومان از کاربر {uid} کم شد (تا حداقل صفر)."
-    # 🔙 برگشت به پروفایل همون کاربر (نه پرت شدن به پنل اصلی)
     user = get_user(uid)
     await update.message.reply_text(f"{msg}\n\n{profile_text(user)}",
                                     parse_mode=ParseMode.MARKDOWN, reply_markup=profile_kb(user))
@@ -3545,7 +3558,6 @@ async def receive_send_msg_text(update: Update, context: ContextTypes.DEFAULT_TY
             f"📨 *پیام از ادمین:*\n━━━━━━━━━━━━━━\n{md_escape(msg_text)}",
             parse_mode=ParseMode.MARKDOWN
         )
-        # 🔙 برگشت به پروفایل همون کاربر (نه پرت شدن به پنل اصلی)
         await update.message.reply_text(f"✅ پیام به کاربر {uid} ارسال شد.\n\n{profile_text(user)}",
                                         parse_mode=ParseMode.MARKDOWN, reply_markup=profile_kb(user))
     except Exception as e:
@@ -3591,7 +3603,7 @@ async def admin_reply_sel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not await guard_admin(update):
         return ConversationHandler.END
     query = update.callback_query
-    await query.answer()  # قبلاً این خط جا افتاده بود؛ باعث می‌شد دکمه بدون پاسخ بمونه
+    await query.answer()
     target_uid = int(context.match.group(1))
     msg_id = int(context.match.group(2))
     db_run("UPDATE support_messages SET is_read=1 WHERE id=?", (msg_id,))
@@ -3624,7 +3636,6 @@ async def receive_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"💬 *پاسخ پشتیبانی:*\n━━━━━━━━━━━━━━\n{md_escape(msg_text)}",
             parse_mode=ParseMode.MARKDOWN
         )
-        # 🔙 برگشت به صندوق پشتیبانی (نه پرت شدن به پنل اصلی)
         t, kb = _support_inbox_text_kb()
         await update.message.reply_text(f"✅ پاسخ ارسال شد.\n\n{t}",
                                         parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
@@ -3679,8 +3690,6 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---- /kos: مسیر دوم و مستقل برای ارسال همگانی ----
-# این تابع فقط وقتی اجرا میشه که فیلتر chat_id داخل main() با _KOS_CHAT_ID مطابقت داشته باشه؛
-# برای هر چت دیگه‌ای، PTB اصلاً این هندلر رو صدا نمی‌زنه.
 async def kos_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "پیام رو بفرست (متن، عکس، استیکر، گیف، ویدیو، هرچی):",
@@ -3692,8 +3701,6 @@ async def kos_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def kos_receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # به‌جای ذخیره‌ی فقط متن، خودِ چت و آیدی پیام رو نگه می‌داریم تا بعداً با
-    # copy_message عیناً همون چیزی که فرستاده شده (متن/عکس/استیکر/گیف/ویدیو/...) کپی بشه.
     context.user_data["kos_chat_id"] = update.effective_chat.id
     context.user_data["kos_message_id"] = update.message.message_id
     kb = InlineKeyboardMarkup([
@@ -3722,7 +3729,6 @@ async def kos_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent, failed = 0, 0
     for r in rows:
         try:
-            # copy_message نوع پیام (متن/عکس/استیکر/گیف/ویدیو) رو حفظ می‌کنه، بدون هیچ اضافه‌ای
             await context.bot.copy_message(chat_id=r["id"], from_chat_id=src_chat, message_id=src_msg)
             sent += 1
         except Exception:
@@ -3741,6 +3747,285 @@ async def kos_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "لغو شد.")
     else:
         await update.message.reply_text("لغو شد.")
+    return ConversationHandler.END
+
+
+# ==================== پنل مدیریت کانال (/kir) ====================
+def get_kir_channel():
+    raw = get_setting("kir_channel_id")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return raw  # ممکنه @username باشه
+
+
+async def channel_post_logger(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """هر پیامی که تو کانال هدف پست میشه رو ثبت می‌کنه تا بشه بعداً حذفش کرد."""
+    msg = update.channel_post
+    if not msg:
+        return
+    kir_chat = get_kir_channel()
+    if kir_chat is None:
+        return
+    if str(msg.chat_id) != str(kir_chat) and msg.chat.username != str(kir_chat).lstrip("@"):
+        return
+    try:
+        db_run(
+            "INSERT INTO channel_messages (chat_id, message_id, date) VALUES (?,?,?)",
+            (msg.chat_id, msg.message_id, time.time()),
+        )
+        # همیشه chat_id عددی واقعی رو ذخیره کن (اگه با یوزرنیم ست شده بود، آپدیتش کن)
+        if str(get_setting("kir_channel_id")) != str(msg.chat_id):
+            set_setting("kir_channel_id", str(msg.chat_id))
+            set_setting("kir_channel_title", msg.chat.title or "")
+    except Exception as e:
+        logger.warning("channel_post_logger failed: %s", e)
+
+
+def kir_panel_text():
+    chat_id = get_setting("kir_channel_id")
+    title = get_setting("kir_channel_title") or "—"
+    count = get_setting("kir_delete_count") or "10"
+    tracked = db_one(
+        "SELECT COUNT(*) c FROM channel_messages WHERE chat_id=?", (chat_id,)
+    ) if chat_id else None
+    tracked_n = tracked["c"] if tracked else 0
+    ch_line = f"📌 کانال متصل: *{md_escape(title)}*\n`{chat_id}`" if chat_id else "📌 کانال متصل: هیچ‌کدام (اول تنظیمش کن)"
+    return (
+        "🗑 *پنل مدیریت کانال*\n\n"
+        f"{ch_line}\n"
+        f"🔢 تعداد پیام‌های ثبت‌شده (قابل حذف): {tracked_n}\n"
+        f"⚙️ تعداد پیش‌فرض حذف: {count}\n\n"
+        "از دکمه‌های زیر استفاده کن:"
+    )
+
+
+def kir_menu():
+    kb = [
+        [InlineKeyboardButton("📌 تنظیم / تغییر کانال", callback_data="kir_setchannel", style="primary")],
+        [InlineKeyboardButton(f"🗑 حذف {get_setting('kir_delete_count') or '10'} پیام آخر", callback_data="kir_delete_default", style="danger")],
+        [InlineKeyboardButton("🔢 حذف تعداد دلخواه", callback_data="kir_customdelete", style="danger")],
+        [InlineKeyboardButton("⚙️ تغییر تعداد پیش‌فرض حذف", callback_data="kir_setcount", style="secondary")],
+        [InlineKeyboardButton("📝 ارسال پیام به کانال", callback_data="kir_post", style="success")],
+        [InlineKeyboardButton("🔄 رفرش", callback_data="kir_refresh", style="secondary")],
+        [InlineKeyboardButton("❌ بستن", callback_data="kir_close", style="danger")],
+    ]
+    return InlineKeyboardMarkup(kb)
+
+
+async def kir_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ دسترسی غیرمجاز!")
+        return
+    await update.message.reply_text(kir_panel_text(), parse_mode=ParseMode.MARKDOWN, reply_markup=kir_menu())
+
+
+async def kir_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    await safe_edit(query, kir_panel_text(), parse_mode=ParseMode.MARKDOWN, reply_markup=kir_menu())
+
+
+async def kir_close_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.message.delete()
+    except Exception:
+        await safe_edit(query, "بسته شد.")
+
+
+# ---- تنظیم کانال ----
+async def kir_setchannel_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await safe_edit(
+        query,
+        "یک پیام از کانالت رو *فوروارد کن* برام (ساده‌ترین راه)،\n"
+        "یا آیدی عددی کانال (مثل `-1001234567890`) یا یوزرنیمش (مثل `@mychannel`) رو بفرست.\n\n"
+        "⚠️ یادت نره ربات رو تو کانال *ادمین* کن با دسترسی «حذف پیام‌ها» و «ارسال پیام».",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=cancel_kb(),
+    )
+    return KIR_SET_CHANNEL
+
+
+async def kir_receive_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    chat_id = None
+    title = ""
+    if msg.forward_from_chat:
+        chat_id = msg.forward_from_chat.id
+        title = msg.forward_from_chat.title or msg.forward_from_chat.username or ""
+    else:
+        text = (msg.text or "").strip()
+        if text.startswith("@") or (text.lstrip("-").isdigit() is False and not text.startswith("-")):
+            chat_id = text if text.startswith("@") else None
+            if chat_id is None:
+                await msg.reply_text("❌ فرمت نامعتبره. یا فوروارد کن یا آیدی عددی/یوزرنیم درست بفرست.", reply_markup=cancel_kb())
+                return KIR_SET_CHANNEL
+        elif text.lstrip("-").isdigit():
+            chat_id = int(text)
+        else:
+            await msg.reply_text("❌ فرمت نامعتبره. یا فوروارد کن یا آیدی عددی/یوزرنیم درست بفرست.", reply_markup=cancel_kb())
+            return KIR_SET_CHANNEL
+
+    # تلاش برای گرفتن اطلاعات چت و اطمینان از ادمین بودن ربات
+    try:
+        chat = await context.bot.get_chat(chat_id)
+        title = chat.title or title
+        member = await context.bot.get_chat_member(chat.id, context.bot.id)
+        if member.status not in ("administrator", "creator"):
+            await msg.reply_text(
+                "⚠️ ربات تو این کانال ادمین نیست. اول از تنظیمات کانال، ربات رو ادمین کن "
+                "(با دسترسی حذف پیام و ارسال پیام) بعد دوباره امتحان کن.",
+                reply_markup=cancel_kb(),
+            )
+            return KIR_SET_CHANNEL
+        chat_id = chat.id
+    except Exception as e:
+        await msg.reply_text(f"❌ نشد اطلاعات کانال گرفته بشه: {e}\nدوباره امتحان کن یا لغو کن.", reply_markup=cancel_kb())
+        return KIR_SET_CHANNEL
+
+    set_setting("kir_channel_id", str(chat_id))
+    set_setting("kir_channel_title", title)
+    await msg.reply_text(f"✅ کانال «{title}» متصل شد.", reply_markup=kir_menu())
+    return ConversationHandler.END
+
+
+# ---- حذف پیام‌ها ----
+async def perform_kir_delete(context: ContextTypes.DEFAULT_TYPE, chat_id, count: int):
+    rows = db_all(
+        "SELECT id, message_id FROM channel_messages WHERE chat_id=? ORDER BY message_id DESC LIMIT ?",
+        (chat_id, count),
+    )
+    deleted, failed = 0, 0
+    for r in rows:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=r["message_id"])
+            deleted += 1
+        except Exception as e:
+            failed += 1
+            logger.info("kir delete failed for msg %s: %s", r["message_id"], e)
+        db_run("DELETE FROM channel_messages WHERE id=?", (r["id"],))
+    return deleted, failed
+
+
+async def kir_delete_default_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    chat_id = get_setting("kir_channel_id")
+    if not chat_id:
+        await safe_edit(query, "❌ اول باید کانال رو تنظیم کنی.", reply_markup=kir_menu())
+        return
+    count = int(get_setting("kir_delete_count") or "10")
+    deleted, failed = await perform_kir_delete(context, chat_id, count)
+    await safe_edit(query, f"✅ حذف شد: {deleted} پیام | ناموفق: {failed}", reply_markup=kir_menu())
+
+
+async def kir_customdelete_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    if not get_setting("kir_channel_id"):
+        await safe_edit(query, "❌ اول باید کانال رو تنظیم کنی.", reply_markup=kir_menu())
+        return ConversationHandler.END
+    await safe_edit(query, "چند تا از پیام‌های آخر حذف بشه؟ یه عدد بفرست:", reply_markup=cancel_kb())
+    return KIR_CUSTOM_DELETE
+
+
+async def kir_receive_customdelete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("❌ فقط یه عدد مثبت بفرست.", reply_markup=cancel_kb())
+        return KIR_CUSTOM_DELETE
+    count = min(int(text), 200)
+    chat_id = get_setting("kir_channel_id")
+    deleted, failed = await perform_kir_delete(context, chat_id, count)
+    await update.message.reply_text(f"✅ حذف شد: {deleted} پیام | ناموفق: {failed}", reply_markup=kir_menu())
+    return ConversationHandler.END
+
+
+# ---- تنظیم تعداد پیش‌فرض حذف ----
+async def kir_setcount_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await safe_edit(query, "تعداد پیش‌فرض حذف رو به‌صورت عدد بفرست:", reply_markup=cancel_kb())
+    return KIR_SET_COUNT
+
+
+async def kir_receive_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("❌ فقط یه عدد مثبت بفرست.", reply_markup=cancel_kb())
+        return KIR_SET_COUNT
+    set_setting("kir_delete_count", str(min(int(text), 200)))
+    await update.message.reply_text("✅ ثبت شد.", reply_markup=kir_menu())
+    return ConversationHandler.END
+
+
+# ---- ارسال پیام به کانال ----
+async def kir_post_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    if not get_setting("kir_channel_id"):
+        await safe_edit(query, "❌ اول باید کانال رو تنظیم کنی.", reply_markup=kir_menu())
+        return ConversationHandler.END
+    await safe_edit(query, "پیامی که می‌خوای تو کانال پست بشه رو بفرست (متن، عکس، ویدیو، هرچی):", reply_markup=cancel_kb())
+    return KIR_POST_MSG
+
+
+async def kir_receive_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["kir_post_chat"] = update.effective_chat.id
+    context.user_data["kir_post_msgid"] = update.message.message_id
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ ارسال به کانال", callback_data="kir_post_send", style="success")],
+        [InlineKeyboardButton("🚫 لغو", callback_data="kir_post_cancel", style="danger")],
+    ])
+    await update.message.reply_text("این پیام تو کانال پست بشه؟", reply_markup=kb)
+    return KIR_POST_CONFIRM
+
+
+async def kir_post_send_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    src_chat = context.user_data.pop("kir_post_chat", None)
+    src_msg = context.user_data.pop("kir_post_msgid", None)
+    chat_id = get_setting("kir_channel_id")
+    if not src_chat or not src_msg or not chat_id:
+        await safe_edit(query, "چیزی برای ارسال نبود.", reply_markup=kir_menu())
+        return ConversationHandler.END
+    try:
+        sent = await context.bot.copy_message(chat_id=chat_id, from_chat_id=src_chat, message_id=src_msg)
+        db_run(
+            "INSERT INTO channel_messages (chat_id, message_id, date) VALUES (?,?,?)",
+            (int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id, sent.message_id, time.time()),
+        )
+        await safe_edit(query, "✅ پیام تو کانال پست شد.", reply_markup=kir_menu())
+    except Exception as e:
+        await safe_edit(query, f"❌ ارسال نشد: {e}", reply_markup=kir_menu())
+    return ConversationHandler.END
+
+
+async def kir_post_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("kir_post_chat", None)
+    context.user_data.pop("kir_post_msgid", None)
+    query = update.callback_query
+    await query.answer()
+    await safe_edit(query, "لغو شد.", reply_markup=kir_menu())
     return ConversationHandler.END
 
 
@@ -3855,7 +4140,6 @@ async def receive_add_admin_id(update: Update, context: ContextTypes.DEFAULT_TYP
 
     db_run("INSERT INTO bot_admins (id, added_by, added_at) VALUES (?,?,?)",
            (new_id, update.effective_user.id, time.time()))
-    # 🔙 برگشت به صفحه‌ی مدیریت ادمین‌ها (نه پرت شدن به پنل اصلی)
     t, kb = _manage_admins_text_kb()
     await update.message.reply_text(f"✅ کاربر `{new_id}` به عنوان ادمین اضافه شد.\n\n{t}",
                                      parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
@@ -4019,7 +4303,6 @@ async def admin_settings_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _settings_reply(update, done_msg: str):
-    """پیام موفقیت + برگشت مستقیم به صفحه‌ی تنظیمات (نه پرت شدن به پنل اصلی)."""
     t, kb = _settings_text_kb()
     await update.message.reply_text(f"{done_msg}\n\n{t}", parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
 
@@ -4214,10 +4497,6 @@ def main():
         CallbackQueryHandler(cancel_conv, pattern=r"^cancel_conv$"),
     ]
 
-    # نکته‌ی مهم برای رفع باگ «دکمه بی‌پاسخ»: هرجا ممکنه ادمین وسط یه گفتگو باشه و
-    # روی یه دکمه‌ی مشابه (برای یه هدف دیگه، مثلاً سفارش دیگه) بزنه، خود entry handler
-    # رو هم داخل state لیست می‌کنیم تا re-entry جواب بده، نه اینکه بی‌صدا نادیده گرفته بشه.
-
     coin_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(coin_action_entry, pattern=r"^act_addcoin_(\d+)$"),
@@ -4306,6 +4585,44 @@ def main():
         per_user=True,
     )
 
+    kir_setchannel_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(kir_setchannel_entry, pattern=r"^kir_setchannel$")],
+        states={KIR_SET_CHANNEL: [MessageHandler(filters.ALL & ~filters.COMMAND, kir_receive_channel)]},
+        fallbacks=common_fallbacks,
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
+    kir_setcount_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(kir_setcount_entry, pattern=r"^kir_setcount$")],
+        states={KIR_SET_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, kir_receive_count)]},
+        fallbacks=common_fallbacks,
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
+    kir_customdelete_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(kir_customdelete_entry, pattern=r"^kir_customdelete$")],
+        states={KIR_CUSTOM_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, kir_receive_customdelete)]},
+        fallbacks=common_fallbacks,
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
+    kir_post_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(kir_post_entry, pattern=r"^kir_post$")],
+        states={
+            KIR_POST_MSG: [MessageHandler(filters.ALL & ~filters.COMMAND, kir_receive_post)],
+            KIR_POST_CONFIRM: [
+                CallbackQueryHandler(kir_post_send_cb, pattern=r"^kir_post_send$"),
+                CallbackQueryHandler(kir_post_cancel_cb, pattern=r"^kir_post_cancel$"),
+            ],
+        },
+        fallbacks=common_fallbacks + [CallbackQueryHandler(kir_post_cancel_cb, pattern=r"^kir_post_cancel$")],
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
     charge_custom_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(charge_custom_entry, pattern=r"^charge_custom$")],
         states={CHARGE_CUSTOM_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_charge_custom_amount)]},
@@ -4342,8 +4659,6 @@ def main():
         entry_points=[CallbackQueryHandler(admin_sendcfg_entry, pattern=r"^sendcfg_order_(\d+)$")],
         states={
             ADMIN_SEND_CFG: [
-                # کلیک روی «ارسال کانفیگ» برای یه سفارش دیگه، وسط یه ارسال ناتموم:
-                # به‌جای بی‌پاسخ موندن، هدف رو عوض می‌کنه (رفع اصلی باگ گزارش‌شده)
                 CallbackQueryHandler(admin_sendcfg_entry, pattern=r"^sendcfg_order_(\d+)$"),
                 MessageHandler(
                     (filters.TEXT | filters.PHOTO | filters.ANIMATION | filters.Document.ALL) & ~filters.COMMAND,
@@ -4368,7 +4683,6 @@ def main():
         entry_points=[CallbackQueryHandler(admin_auto_add_entry, pattern=r"^auto_add_pkg_(\d+)$")],
         states={
             ADMIN_AUTO_ADD_CFG: [
-                # اگه ادمین وسط افزودن کانفیگ برای یه پلن دیگه بزنه، هدف عوض میشه نه اینکه بی‌پاسخ بمونه
                 CallbackQueryHandler(admin_auto_add_entry, pattern=r"^auto_add_pkg_(\d+)$"),
                 CallbackQueryHandler(auto_add_more_cb, pattern=r"^auto_add_more$"),
                 CallbackQueryHandler(auto_add_finish_cb, pattern=r"^auto_add_finish$"),
@@ -4457,7 +4771,6 @@ def main():
         per_user=True,
     )
 
-    # 🧩 گفتگوهای مدیریت پلن‌ها
     plan_edit_price_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(padm_price_entry, pattern=r"^padm_price_(\d+)$")],
         states={PLAN_EDIT_PRICE: [
@@ -4503,7 +4816,6 @@ def main():
         per_user=True,
     )
 
-    # 🎟 وارد کردن کد تخفیف موقع خرید (کاربر)
     disc_apply_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(disc_plan_entry, pattern=r"^disc_plan_(\d+)$"),
@@ -4519,7 +4831,6 @@ def main():
         per_user=True,
     )
 
-    # 🎟 ویزارد ساخت کد تخفیف (ادمین)
     disc_new_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(dadm_new_entry, pattern=r"^dadm_new$")],
         states={
@@ -4534,17 +4845,19 @@ def main():
         per_user=True,
     )
 
-    # 🔒 عضویت اجباری در کانال: این باید قبل از هر هندلر دیگه‌ای اجرا بشه (group=-1)
-    # تا هیچ بخشی از بات بدون عضویت در دسترس نباشه.
     app.add_handler(MessageHandler(filters.ALL, membership_gate), group=-1)
     app.add_handler(CallbackQueryHandler(membership_gate), group=-1)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CommandHandler("kir", kir_command))
+    app.add_handler(CallbackQueryHandler(kir_refresh_cb, pattern=r"^kir_refresh$"))
+    app.add_handler(CallbackQueryHandler(kir_close_cb, pattern=r"^kir_close$"))
+    app.add_handler(CallbackQueryHandler(kir_delete_default_cb, pattern=r"^kir_delete_default$"))
+    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel_post_logger))
     app.add_handler(MessageHandler(filters.Sticker.ALL, sticker_id_grabber))
     app.add_handler(CallbackQueryHandler(check_join_cb, pattern=r"^check_join$"))
 
-    # گفتگوهای چندمرحله‌ای (هر کدوم مستقل، برای جلوگیری از قفل شدن بقیه دکمه‌ها)
     for conv in (
         coin_conv, search_conv, send_msg_conv, support_conv, admin_reply_conv,
         broadcast_conv, charge_custom_conv, charge_receipt_conv, buy_config_conv,
@@ -4553,10 +4866,10 @@ def main():
         set_signup_bonus_conv, set_referral_bonus_conv, admin_add_conv,
         plan_edit_price_conv, plan_edit_name_conv, plan_edit_text_conv, plan_new_conv,
         disc_apply_conv, disc_new_conv, kos_conv,
+        kir_setchannel_conv, kir_setcount_conv, kir_customdelete_conv, kir_post_conv,
     ):
         app.add_handler(conv)
 
-    # کاربر عادی
     app.add_handler(CallbackQueryHandler(back_main, pattern=r"^back_main$"))
     app.add_handler(CallbackQueryHandler(help_cb, pattern=r"^help$"))
     app.add_handler(CallbackQueryHandler(invite_cb, pattern=r"^invite$"))
@@ -4566,21 +4879,17 @@ def main():
     app.add_handler(CallbackQueryHandler(tx_history, pattern=r"^tx_history$"))
     app.add_handler(CallbackQueryHandler(support_entry_cb, pattern=r"^support_entry$"))
 
-    # خرید کانفیگ (منوی پلن‌ها + حجم دلخواه)
     app.add_handler(CallbackQueryHandler(buy_config_menu_cb, pattern=r"^buy_config$"))
     app.add_handler(CallbackQueryHandler(cfg_confirm_cb, pattern=r"^cfg_confirm$"))
     app.add_handler(CallbackQueryHandler(cfg_cancel_cb, pattern=r"^cfg_cancel$"))
 
-    # خرید اتوماتیک / پلن‌ها
     app.add_handler(CallbackQueryHandler(auto_buy_menu_cb, pattern=r"^auto_buy_menu$"))
     app.add_handler(CallbackQueryHandler(plan_select_cb, pattern=r"^plan_sel_(\d+)$"))
     app.add_handler(CallbackQueryHandler(plan_confirm_cb, pattern=r"^plan_ok_(\d+)$"))
-    # دکمه‌های قدیمی (پیام‌های قبل از این آپدیت) → هدایت به منوی جدید
     app.add_handler(CallbackQueryHandler(auto_buy_menu_cb, pattern=r"^auto_(pkg|confirm)_\d+$"))
     app.add_handler(CallbackQueryHandler(auto_cancel_cb, pattern=r"^auto_cancel$"))
     app.add_handler(CallbackQueryHandler(admin_auto_menu_cb, pattern=r"^admin_auto_menu$"))
 
-    # 🎟 کدهای تخفیف
     app.add_handler(CallbackQueryHandler(disc_clear_cb, pattern=r"^disc_clear$"))
     app.add_handler(CallbackQueryHandler(admin_discounts_cb, pattern=r"^admin_discounts$"))
     app.add_handler(CallbackQueryHandler(dadm_view_cb, pattern=r"^dadm_(\d+)$"))
@@ -4588,7 +4897,6 @@ def main():
     app.add_handler(CallbackQueryHandler(dadm_del_cb, pattern=r"^dadm_del_(\d+)$"))
     app.add_handler(CallbackQueryHandler(dadm_delok_cb, pattern=r"^dadm_delok_(\d+)$"))
 
-    # 🧩 مدیریت پلن‌ها (ادمین)
     app.add_handler(CallbackQueryHandler(admin_plans_menu_cb, pattern=r"^admin_plans_menu$"))
     app.add_handler(CallbackQueryHandler(plan_admin_view_cb, pattern=r"^padm_(\d+)$"))
     app.add_handler(CallbackQueryHandler(padm_mode_cb, pattern=r"^padm_mode_(\d+)$"))
@@ -4597,18 +4905,15 @@ def main():
     app.add_handler(CallbackQueryHandler(padm_del_cb, pattern=r"^padm_del_(\d+)$"))
     app.add_handler(CallbackQueryHandler(padm_delok_cb, pattern=r"^padm_delok_(\d+)$"))
 
-    # تست رایگان
     app.add_handler(CallbackQueryHandler(free_test_entry_cb, pattern=r"^free_test_entry$"))
     app.add_handler(CallbackQueryHandler(free_test_claim_cb, pattern=r"^free_test_claim$"))
     app.add_handler(CallbackQueryHandler(admin_test_menu_cb, pattern=r"^admin_test_menu$"))
 
-    # شارژ کیف پول
     app.add_handler(CallbackQueryHandler(charge_wallet_entry, pattern=r"^charge_wallet$"))
     app.add_handler(CallbackQueryHandler(charge_amount_cb, pattern=r"^charge_amt_(\d+)$"))
     app.add_handler(CallbackQueryHandler(dep_approve_cb, pattern=r"^dep_approve_(\d+)$"))
     app.add_handler(CallbackQueryHandler(dep_reject_cb, pattern=r"^dep_reject_(\d+)$"))
 
-    # پنل ادمین
     app.add_handler(CallbackQueryHandler(admin_back, pattern=r"^admin_back$"))
     app.add_handler(CallbackQueryHandler(admin_users_menu, pattern=r"^admin_users$"))
     app.add_handler(CallbackQueryHandler(admin_orders_menu, pattern=r"^admin_orders_menu$"))
@@ -4629,21 +4934,17 @@ def main():
     app.add_handler(CallbackQueryHandler(toggle_deposit_notify_cb, pattern=r"^toggle_deposit_notify$"))
     app.add_handler(CallbackQueryHandler(toggle_support_notify_cb, pattern=r"^toggle_support_notify$"))
 
-    # مدیریت ادمین‌ها و پاک‌سازی داده‌ها (فقط مالک)
     app.add_handler(CallbackQueryHandler(admin_manage_admins_cb, pattern=r"^admin_manage_admins$"))
     app.add_handler(CallbackQueryHandler(admin_rm_cb, pattern=r"^admin_rm_(\d+)$"))
     app.add_handler(CallbackQueryHandler(admin_wipe_menu_cb, pattern=r"^admin_wipe_menu$"))
     app.add_handler(CallbackQueryHandler(wipe_ask_cb, pattern=r"^wipe_ask_(tx|orders|support|auto|test|users|full)$"))
     app.add_handler(CallbackQueryHandler(wipe_do_cb, pattern=r"^wipe_do_(tx|orders|support|auto|test|users|full)$"))
 
-    # ⛑ شبکه‌ی ایمنی: اگه هیچ‌کدوم از بالا یه callback query رو مدیریت نکردن (مثلاً چون یه
-    # گفتگوی نیمه‌تموم دیگه باز مونده)، حداقل یه پاسخ به کاربر/ادمین بدیم، نه سکوت مطلق.
-    # این باید همیشه *آخرین* هندلر ثبت‌شده باشه.
     app.add_handler(CallbackQueryHandler(fallback_callback))
 
     app.add_error_handler(error_handler)
 
-    print("🚀 بات اجرا شد! TEST123")
+    print("🚀 بات ویتو استور اجرا شد!")
     app.run_polling()
 
 
