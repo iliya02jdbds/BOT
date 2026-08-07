@@ -3807,9 +3807,9 @@ def kir_menu():
         [InlineKeyboardButton("📌 تنظیم / تغییر کانال", callback_data="kir_setchannel", style="primary")],
         [InlineKeyboardButton(f"🗑 حذف {get_setting('kir_delete_count') or '10'} پیام آخر", callback_data="kir_delete_default", style="danger")],
         [InlineKeyboardButton("🔢 حذف تعداد دلخواه", callback_data="kir_customdelete", style="danger")],
-        [InlineKeyboardButton("⚙️ تغییر تعداد پیش‌فرض حذف", callback_data="kir_setcount", style="secondary")],
+        [InlineKeyboardButton("⚙️ تغییر تعداد پیش‌فرض حذف", callback_data="kir_setcount", style="primary")],
         [InlineKeyboardButton("📝 ارسال پیام به کانال", callback_data="kir_post", style="success")],
-        [InlineKeyboardButton("🔄 رفرش", callback_data="kir_refresh", style="secondary")],
+        [InlineKeyboardButton("🔄 رفرش", callback_data="kir_refresh", style="primary")],
         [InlineKeyboardButton("❌ بستن", callback_data="kir_close", style="danger")],
     ]
     return InlineKeyboardMarkup(kb)
