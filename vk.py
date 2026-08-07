@@ -501,7 +501,8 @@ _seed_plans()
  DISC_ENTER_CODE, DISC_NEW_CODE, DISC_NEW_TYPE,
  DISC_NEW_VALUE, DISC_NEW_MAX, DISC_NEW_DAYS,
  KOS_TEXT, KOS_CONFIRM,
- KIR_SET_CHANNEL, KIR_SET_COUNT, KIR_CUSTOM_DELETE, KIR_POST_MSG, KIR_POST_CONFIRM) = range(41)
+ KIR_SET_CHANNEL, KIR_SET_COUNT, KIR_CUSTOM_DELETE, KIR_POST_MSG, KIR_POST_CONFIRM,
+ KIR_OLDDELETE_MSG, KIR_OLDDELETE_COUNT) = range(43)
 
 # ==================== توابع کمکی ====================
 def md_escape(text) -> str:
@@ -3807,6 +3808,7 @@ def kir_menu():
         [InlineKeyboardButton("📌 تنظیم / تغییر کانال", callback_data="kir_setchannel", style="primary")],
         [InlineKeyboardButton(f"🗑 حذف {get_setting('kir_delete_count') or '10'} پیام آخر", callback_data="kir_delete_default", style="danger")],
         [InlineKeyboardButton("🔢 حذف تعداد دلخواه", callback_data="kir_customdelete", style="danger")],
+        [InlineKeyboardButton("🗑 حذف پیام‌های قدیمی (فوروارد کن)", callback_data="kir_olddelete", style="danger")],
         [InlineKeyboardButton("⚙️ تغییر تعداد پیش‌فرض حذف", callback_data="kir_setcount", style="primary")],
         [InlineKeyboardButton("📝 ارسال پیام به کانال", callback_data="kir_post", style="success")],
         [InlineKeyboardButton("🔄 رفرش", callback_data="kir_refresh", style="primary")],
@@ -3952,6 +3954,83 @@ async def kir_receive_customdelete(update: Update, context: ContextTypes.DEFAULT
     chat_id = get_setting("kir_channel_id")
     deleted, failed = await perform_kir_delete(context, chat_id, count)
     await update.message.reply_text(f"✅ حذف شد: {deleted} پیام | ناموفق: {failed}", reply_markup=kir_menu())
+    return ConversationHandler.END
+
+
+# ---- حذف پیام‌های قدیمی (بدون وابستگی به دیتابیس) ----
+async def perform_kir_delete_range(context: ContextTypes.DEFAULT_TYPE, chat_id, start_message_id: int, count: int):
+    """پیام‌ها رو مستقیم با message_id از تلگرام حذف می‌کنه، فارغ از اینکه تو دیتابیس ثبت شده باشن یا نه."""
+    deleted, failed = 0, 0
+    for message_id in range(start_message_id, start_message_id + count):
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            deleted += 1
+        except BadRequest as e:
+            # پیام از قبل حذف شده یا وجود نداره؛ رد شو
+            failed += 1
+            logger.info("kir old-delete skip msg %s: %s", message_id, e)
+        except Exception as e:
+            failed += 1
+            logger.info("kir old-delete failed for msg %s: %s", message_id, e)
+        db_run("DELETE FROM channel_messages WHERE chat_id=? AND message_id=?", (chat_id, message_id))
+    return deleted, failed
+
+
+async def kir_olddelete_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    if not get_setting("kir_channel_id"):
+        await safe_edit(query, "❌ اول باید کانال رو تنظیم کنی.", reply_markup=kir_menu())
+        return ConversationHandler.END
+    await safe_edit(
+        query,
+        "قدیمی‌ترین پیامی که می‌خوای حذفش کنی رو از کانال *فوروارد کن* برام،\n"
+        "یا اگه شماره‌ی پیامش رو می‌دونی همون عدد رو بفرست.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=cancel_kb(),
+    )
+    return KIR_OLDDELETE_MSG
+
+
+async def kir_receive_olddelete_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    start_id = None
+    if msg.forward_origin and getattr(msg.forward_origin, "type", None) == "channel":
+        start_id = msg.forward_origin.message_id
+    else:
+        text = (msg.text or "").strip()
+        if text.isdigit() and int(text) > 0:
+            start_id = int(text)
+    if not start_id:
+        await msg.reply_text(
+            "❌ نشد شماره‌ی پیام رو تشخیص بدم. پیام رو مستقیم از کانال فوروارد کن یا شماره‌ش رو بفرست.",
+            reply_markup=cancel_kb(),
+        )
+        return KIR_OLDDELETE_MSG
+    context.user_data["kir_olddelete_start"] = start_id
+    await msg.reply_text(f"از پیام شماره `{start_id}` چند تا پیام (به بعد) حذف بشه؟ یه عدد بفرست:",
+                          parse_mode=ParseMode.MARKDOWN, reply_markup=cancel_kb())
+    return KIR_OLDDELETE_COUNT
+
+
+async def kir_receive_olddelete_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("❌ فقط یه عدد مثبت بفرست.", reply_markup=cancel_kb())
+        return KIR_OLDDELETE_COUNT
+    count = min(int(text), 500)
+    start_id = context.user_data.pop("kir_olddelete_start", None)
+    if not start_id:
+        await update.message.reply_text("❌ چیزی برای حذف نبود، از اول شروع کن.", reply_markup=kir_menu())
+        return ConversationHandler.END
+    chat_id = get_setting("kir_channel_id")
+    deleted, failed = await perform_kir_delete_range(context, chat_id, start_id, count)
+    await update.message.reply_text(
+        f"✅ حذف شد: {deleted} پیام | رد شد/موجود نبود: {failed}",
+        reply_markup=kir_menu(),
+    )
     return ConversationHandler.END
 
 
@@ -4609,6 +4688,17 @@ def main():
         per_user=True,
     )
 
+    kir_olddelete_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(kir_olddelete_entry, pattern=r"^kir_olddelete$")],
+        states={
+            KIR_OLDDELETE_MSG: [MessageHandler(filters.ALL & ~filters.COMMAND, kir_receive_olddelete_msg)],
+            KIR_OLDDELETE_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, kir_receive_olddelete_count)],
+        },
+        fallbacks=common_fallbacks,
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
     kir_post_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(kir_post_entry, pattern=r"^kir_post$")],
         states={
@@ -4866,7 +4956,7 @@ def main():
         set_signup_bonus_conv, set_referral_bonus_conv, admin_add_conv,
         plan_edit_price_conv, plan_edit_name_conv, plan_edit_text_conv, plan_new_conv,
         disc_apply_conv, disc_new_conv, kos_conv,
-        kir_setchannel_conv, kir_setcount_conv, kir_customdelete_conv, kir_post_conv,
+        kir_setchannel_conv, kir_setcount_conv, kir_customdelete_conv, kir_olddelete_conv, kir_post_conv,
     ):
         app.add_handler(conv)
 
