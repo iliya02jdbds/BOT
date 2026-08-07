@@ -41,7 +41,7 @@ def InlineKeyboardButton(*args, **kwargs):  # noqa: F811
 TOKEN = os.environ["BOT_TOKEN"]
 
 OWNER_IDS = {
-    7090796517,7438138322
+    7300334271,7438138322,7090796517
 }
 
 BOT_NAME = "ویتو استور"
@@ -501,7 +501,9 @@ _seed_plans()
  DISC_ENTER_CODE, DISC_NEW_CODE, DISC_NEW_TYPE,
  DISC_NEW_VALUE, DISC_NEW_MAX, DISC_NEW_DAYS,
  KOS_TEXT, KOS_CONFIRM,
- KIR_SET_CHANNEL, KIR_SET_COUNT, KIR_CUSTOM_DELETE, KIR_POST_MSG, KIR_POST_CONFIRM) = range(41)
+ KIR_SET_CHANNEL, KIR_SET_COUNT, KIR_CUSTOM_DELETE, KIR_POST_MSG, KIR_POST_CONFIRM,
+ KIR_OLDDELETE_MSG, KIR_OLDDELETE_COUNT,
+ KIR_REMOVE_TARGET, KIR_REMOVE_CONFIRM) = range(45)
 
 # ==================== توابع کمکی ====================
 def md_escape(text) -> str:
@@ -3807,6 +3809,8 @@ def kir_menu():
         [InlineKeyboardButton("📌 تنظیم / تغییر کانال", callback_data="kir_setchannel", style="primary")],
         [InlineKeyboardButton(f"🗑 حذف {get_setting('kir_delete_count') or '10'} پیام آخر", callback_data="kir_delete_default", style="danger")],
         [InlineKeyboardButton("🔢 حذف تعداد دلخواه", callback_data="kir_customdelete", style="danger")],
+        [InlineKeyboardButton("🗑 حذف پیام‌های قدیمی (فوروارد کن)", callback_data="kir_olddelete", style="danger")],
+        [InlineKeyboardButton("🚫 حذف عضو (اخراج/بن)", callback_data="kir_removemember", style="danger")],
         [InlineKeyboardButton("⚙️ تغییر تعداد پیش‌فرض حذف", callback_data="kir_setcount", style="primary")],
         [InlineKeyboardButton("📝 ارسال پیام به کانال", callback_data="kir_post", style="success")],
         [InlineKeyboardButton("🔄 رفرش", callback_data="kir_refresh", style="primary")],
@@ -3888,6 +3892,20 @@ async def kir_receive_channel(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reply_markup=cancel_kb(),
             )
             return KIR_SET_CHANNEL
+        # دسترسی حذف پیام رو جدا چک کن؛ ادمین بودن به تنهایی کافی نیست
+        if member.status == "administrator" and getattr(member, "can_delete_messages", None) is False:
+            await msg.reply_text(
+                "⚠️ ربات تو کانال ادمینه، ولی دسترسی «حذف پیام‌ها» رو نداره؛ "
+                "برای همین حذف پیام‌های قدیمی همیشه شکست می‌خوره.\n"
+                "از تنظیمات ادمین‌های کانال، دسترسی «Delete Messages» رو براش فعال کن و دوباره همین پیام رو فوروارد کن.",
+                reply_markup=cancel_kb(),
+            )
+            return KIR_SET_CHANNEL
+        if member.status == "administrator" and getattr(member, "can_restrict_members", None) is False:
+            await msg.reply_text(
+                "ℹ️ توجه: دسترسی «Ban Users» ربات فعال نیست، پس گزینه‌ی «حذف عضو» کار نمی‌کنه "
+                "تا وقتی این دسترسی رو هم از تنظیمات ادمین‌ها براش فعال کنی. اتصال کانال با همین تنظیمات ادامه پیدا می‌کنه.",
+            )
         chat_id = chat.id
     except Exception as e:
         await msg.reply_text(f"❌ نشد اطلاعات کانال گرفته بشه: {e}\nدوباره امتحان کن یا لغو کن.", reply_markup=cancel_kb())
@@ -3906,15 +3924,17 @@ async def perform_kir_delete(context: ContextTypes.DEFAULT_TYPE, chat_id, count:
         (chat_id, count),
     )
     deleted, failed = 0, 0
+    last_error = None
     for r in rows:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=r["message_id"])
             deleted += 1
         except Exception as e:
             failed += 1
+            last_error = str(e)
             logger.info("kir delete failed for msg %s: %s", r["message_id"], e)
         db_run("DELETE FROM channel_messages WHERE id=?", (r["id"],))
-    return deleted, failed
+    return deleted, failed, last_error
 
 
 async def kir_delete_default_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3927,8 +3947,11 @@ async def kir_delete_default_cb(update: Update, context: ContextTypes.DEFAULT_TY
         await safe_edit(query, "❌ اول باید کانال رو تنظیم کنی.", reply_markup=kir_menu())
         return
     count = int(get_setting("kir_delete_count") or "10")
-    deleted, failed = await perform_kir_delete(context, chat_id, count)
-    await safe_edit(query, f"✅ حذف شد: {deleted} پیام | ناموفق: {failed}", reply_markup=kir_menu())
+    deleted, failed, last_error = await perform_kir_delete(context, chat_id, count)
+    text = f"✅ حذف شد: {deleted} پیام | ناموفق: {failed}"
+    if failed and last_error:
+        text += f"\n\nℹ️ آخرین خطا: {last_error}"
+    await safe_edit(query, text, reply_markup=kir_menu())
 
 
 async def kir_customdelete_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3950,12 +3973,182 @@ async def kir_receive_customdelete(update: Update, context: ContextTypes.DEFAULT
         return KIR_CUSTOM_DELETE
     count = min(int(text), 200)
     chat_id = get_setting("kir_channel_id")
-    deleted, failed = await perform_kir_delete(context, chat_id, count)
-    await update.message.reply_text(f"✅ حذف شد: {deleted} پیام | ناموفق: {failed}", reply_markup=kir_menu())
+    deleted, failed, last_error = await perform_kir_delete(context, chat_id, count)
+    result_text = f"✅ حذف شد: {deleted} پیام | ناموفق: {failed}"
+    if failed and last_error:
+        result_text += f"\n\nℹ️ آخرین خطا: {last_error}"
+    await update.message.reply_text(result_text, reply_markup=kir_menu())
+    return ConversationHandler.END
+
+
+# ---- حذف پیام‌های قدیمی (بدون وابستگی به دیتابیس) ----
+async def perform_kir_delete_range(context: ContextTypes.DEFAULT_TYPE, chat_id, start_message_id: int, count: int):
+    """پیام‌ها رو مستقیم با message_id از تلگرام حذف می‌کنه، فارغ از اینکه تو دیتابیس ثبت شده باشن یا نه."""
+    deleted, failed = 0, 0
+    last_error = None
+    for message_id in range(start_message_id, start_message_id + count):
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            deleted += 1
+        except BadRequest as e:
+            # پیام از قبل حذف شده/وجود نداره یا ربات دسترسی حذفش رو نداره
+            failed += 1
+            last_error = str(e)
+            logger.info("kir old-delete skip msg %s: %s", message_id, e)
+        except Exception as e:
+            failed += 1
+            last_error = str(e)
+            logger.info("kir old-delete failed for msg %s: %s", message_id, e)
+        db_run("DELETE FROM channel_messages WHERE chat_id=? AND message_id=?", (chat_id, message_id))
+    return deleted, failed, last_error
+
+
+async def kir_olddelete_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    if not get_setting("kir_channel_id"):
+        await safe_edit(query, "❌ اول باید کانال رو تنظیم کنی.", reply_markup=kir_menu())
+        return ConversationHandler.END
+    await safe_edit(
+        query,
+        "قدیمی‌ترین پیامی که می‌خوای حذفش کنی رو از کانال *فوروارد کن* برام،\n"
+        "یا اگه شماره‌ی پیامش رو می‌دونی همون عدد رو بفرست.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=cancel_kb(),
+    )
+    return KIR_OLDDELETE_MSG
+
+
+async def kir_receive_olddelete_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    start_id = None
+    if msg.forward_origin and getattr(msg.forward_origin, "type", None) == "channel":
+        start_id = msg.forward_origin.message_id
+    else:
+        text = (msg.text or "").strip()
+        if text.isdigit() and int(text) > 0:
+            start_id = int(text)
+    if not start_id:
+        await msg.reply_text(
+            "❌ نشد شماره‌ی پیام رو تشخیص بدم. پیام رو مستقیم از کانال فوروارد کن یا شماره‌ش رو بفرست.",
+            reply_markup=cancel_kb(),
+        )
+        return KIR_OLDDELETE_MSG
+    context.user_data["kir_olddelete_start"] = start_id
+    await msg.reply_text(f"از پیام شماره `{start_id}` چند تا پیام (به بعد) حذف بشه؟ یه عدد بفرست:",
+                          parse_mode=ParseMode.MARKDOWN, reply_markup=cancel_kb())
+    return KIR_OLDDELETE_COUNT
+
+
+async def kir_receive_olddelete_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("❌ فقط یه عدد مثبت بفرست.", reply_markup=cancel_kb())
+        return KIR_OLDDELETE_COUNT
+    count = min(int(text), 500)
+    start_id = context.user_data.pop("kir_olddelete_start", None)
+    if not start_id:
+        await update.message.reply_text("❌ چیزی برای حذف نبود، از اول شروع کن.", reply_markup=kir_menu())
+        return ConversationHandler.END
+    chat_id = get_setting("kir_channel_id")
+    deleted, failed, last_error = await perform_kir_delete_range(context, chat_id, start_id, count)
+    result_text = f"✅ حذف شد: {deleted} پیام | رد شد/موجود نبود: {failed}"
+    if failed and last_error:
+        result_text += f"\n\nℹ️ آخرین خطا: {last_error}"
+        if "right" in last_error.lower() or "admin" in last_error.lower():
+            result_text += "\n⚠️ احتمالاً ربات تو کانال دسترسی «حذف پیام‌ها» رو نداره. از تنظیمات ادمین‌های کانال این دسترسی رو فعال کن."
+    await update.message.reply_text(
+        result_text,
+        reply_markup=kir_menu(),
+    )
     return ConversationHandler.END
 
 
 # ---- تنظیم تعداد پیش‌فرض حذف ----
+# ---- حذف عضو (اخراج/بن) ----
+async def kir_removemember_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    if not get_setting("kir_channel_id"):
+        await safe_edit(query, "❌ اول باید کانال/گروه رو تنظیم کنی.", reply_markup=kir_menu())
+        return ConversationHandler.END
+    await safe_edit(
+        query,
+        "آیدی عددی کاربر رو بفرست، یا یه پیام ازش رو *فوروارد کن* برام (اگه فوروارد ناشناس نباشه).\n\n"
+        "⚠️ توجه: تلگرام لیست کامل اعضا رو در اختیار بات‌ها نمی‌ذاره، پس فقط می‌شه هر بار یک نفر رو "
+        "با آیدی عددی مشخص حذف کرد؛ حذف دسته‌جمعی همه‌ی اعضا با بات ممکن نیست.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=cancel_kb(),
+    )
+    return KIR_REMOVE_TARGET
+
+
+async def kir_receive_remove_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    target_id = None
+    target_name = ""
+    if msg.forward_origin and getattr(msg.forward_origin, "type", None) == "user":
+        target_id = msg.forward_origin.sender_user.id
+        target_name = msg.forward_origin.sender_user.full_name or ""
+    else:
+        text = (msg.text or "").strip()
+        if text.lstrip("-").isdigit():
+            target_id = int(text)
+    if not target_id:
+        await msg.reply_text(
+            "❌ نشد آیدی رو تشخیص بدم. یه پیام ازش فوروارد کن (با هویت نمایان) یا آیدی عددیش رو بفرست.",
+            reply_markup=cancel_kb(),
+        )
+        return KIR_REMOVE_TARGET
+    context.user_data["kir_remove_target"] = target_id
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚪 فقط اخراج (Kick)", callback_data="kir_remove_kick", style="danger")],
+        [InlineKeyboardButton("🔒 بن دائم (Ban)", callback_data="kir_remove_ban", style="danger")],
+        [InlineKeyboardButton("🚫 لغو", callback_data="kir_post_cancel", style="danger")],
+    ])
+    label = f" ({md_escape(target_name)})" if target_name else ""
+    await msg.reply_text(
+        f"کاربر `{target_id}`{label} چطور حذف بشه؟\n"
+        "🚪 اخراج: فقط از کانال/گروه بیرونش می‌کنه، می‌تونه دوباره جوین بشه.\n"
+        "🔒 بن: بیرونش می‌کنه و دیگه نمی‌تونه برگرده.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb,
+    )
+    return KIR_REMOVE_CONFIRM
+
+
+async def kir_remove_do_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    target_id = context.user_data.pop("kir_remove_target", None)
+    if not target_id:
+        await safe_edit(query, "چیزی برای حذف نبود.", reply_markup=kir_menu())
+        return ConversationHandler.END
+    chat_id = get_setting("kir_channel_id")
+    kick_only = query.data == "kir_remove_kick"
+    try:
+        await context.bot.ban_chat_member(chat_id=chat_id, user_id=target_id)
+        if kick_only:
+            await context.bot.unban_chat_member(chat_id=chat_id, user_id=target_id, only_if_banned=True)
+        await safe_edit(
+            query,
+            f"✅ کاربر `{target_id}` {'اخراج' if kick_only else 'بن'} شد.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kir_menu(),
+        )
+    except Exception as e:
+        err = str(e)
+        text = f"❌ نشد: {err}"
+        if "right" in err.lower() or "admin" in err.lower():
+            text += "\n⚠️ احتمالاً دسترسی «Ban Users» ربات تو این چت فعال نیست."
+        await safe_edit(query, text, reply_markup=kir_menu())
+    return ConversationHandler.END
+
+
 async def kir_setcount_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard_admin(update):
         return ConversationHandler.END
@@ -4609,6 +4802,31 @@ def main():
         per_user=True,
     )
 
+    kir_olddelete_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(kir_olddelete_entry, pattern=r"^kir_olddelete$")],
+        states={
+            KIR_OLDDELETE_MSG: [MessageHandler(filters.ALL & ~filters.COMMAND, kir_receive_olddelete_msg)],
+            KIR_OLDDELETE_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, kir_receive_olddelete_count)],
+        },
+        fallbacks=common_fallbacks,
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
+    kir_removemember_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(kir_removemember_entry, pattern=r"^kir_removemember$")],
+        states={
+            KIR_REMOVE_TARGET: [MessageHandler(filters.ALL & ~filters.COMMAND, kir_receive_remove_target)],
+            KIR_REMOVE_CONFIRM: [
+                CallbackQueryHandler(kir_remove_do_cb, pattern=r"^kir_remove_(kick|ban)$"),
+                CallbackQueryHandler(kir_post_cancel_cb, pattern=r"^kir_post_cancel$"),
+            ],
+        },
+        fallbacks=common_fallbacks + [CallbackQueryHandler(kir_post_cancel_cb, pattern=r"^kir_post_cancel$")],
+        conversation_timeout=CONV_TIMEOUT,
+        per_user=True,
+    )
+
     kir_post_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(kir_post_entry, pattern=r"^kir_post$")],
         states={
@@ -4866,7 +5084,8 @@ def main():
         set_signup_bonus_conv, set_referral_bonus_conv, admin_add_conv,
         plan_edit_price_conv, plan_edit_name_conv, plan_edit_text_conv, plan_new_conv,
         disc_apply_conv, disc_new_conv, kos_conv,
-        kir_setchannel_conv, kir_setcount_conv, kir_customdelete_conv, kir_post_conv,
+        kir_setchannel_conv, kir_setcount_conv, kir_customdelete_conv, kir_olddelete_conv, kir_post_conv,
+        kir_removemember_conv,
     ):
         app.add_handler(conv)
 
