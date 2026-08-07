@@ -14,6 +14,7 @@ from telegram.error import BadRequest
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes,
     MessageHandler, ConversationHandler, filters, ApplicationHandlerStop,
+    ChatMemberHandler,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -4196,16 +4197,18 @@ async def receive_referral_bonus(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # ==================== 📢 پنل مدیریت کانال (/kir) ====================
-# این بخش یک پنل کامل مدیریت کانال به بات اضافه می‌کند:
-#  • حذف پیام (تعداد دلخواه / با آیدی / بازه / جاروی کور)
-#  • ارسال پست به کانال (متن، عکس، ویدیو، فایل، گیف، صدا) + دکمه شیشه‌ای + پین + بی‌صدا + حذف خودکار
-#  • مدیریت اعضا (حذف/بن، اخراج ساده، آنبن، بن گروهی، مشاهده وضعیت)
-#  • تنظیمات کانال (اسم، بیو، لینک دعوت، آنپین همه) + آمار
+# نسخهٔ ۲ — بدون نیاز به وارد کردن آیدی یا بازهٔ عددی
+#  • حذف پیام‌های قدیمی (حتی قبل از نصب بات) با شناسایی خودکار آخرین آیدی
+#  • خالی کردن کامل کانال با یک دکمه + نوار پیشرفت + دکمهٔ توقف
+#  • شناسایی و حذف اعضا (اسکن خودکار + ثبت خودکار جوین/لفت)
 
-CH_TRACK_KEEP = 5000          # حداکثر تعداد پیام ردیابی‌شده که نگه داشته می‌شود
-CH_BATCH = 100                # حذف دسته‌ای (سقف تلگرام)
-CH_BATCH_SLEEP = 0.35         # تأخیر بین دسته‌ها برای رعایت محدودیت سرعت
-CH_PURGE_MAX = 1000           # سقف جاروی کور در هر بار
+CH_TRACK_KEEP = 20000         # حداکثر رکورد ردیابی‌شده
+CH_BATCH = 100                # سقف حذف دسته‌ای تلگرام
+CH_BATCH_SLEEP = 0.30         # تأخیر بین دسته‌ها (ضد محدودیت سرعت)
+CH_PROGRESS_EVERY = 500       # هر چند پیام، نوار پیشرفت آپدیت شود
+CH_MEMBER_SLEEP = 0.05        # تأخیر بین استعلام اعضا در اسکن
+CH_SCAN_LIMIT = 5000          # سقف کاربران بررسی‌شده در هر اسکن
+CH_PAGE = 8                   # تعداد اعضا در هر صفحه
 
 db_run("""
 CREATE TABLE IF NOT EXISTS channel_posts (
@@ -4228,15 +4231,35 @@ CREATE TABLE IF NOT EXISTS channel_bans (
 )
 """)
 
+db_run("""
+CREATE TABLE IF NOT EXISTS channel_members (
+    chat_id  INTEGER,
+    user_id  INTEGER,
+    username TEXT,
+    name     TEXT,
+    status   TEXT,
+    date     REAL,
+    PRIMARY KEY (chat_id, user_id)
+)
+""")
+
 _init_setting("ch_target_id", "")
 _init_setting("ch_target_title", "")
 _init_setting("ch_target_username", "")
 _init_setting("ch_post_silent", "0")
 _init_setting("ch_post_pin", "0")
 _init_setting("ch_autodel_min", "0")
+_init_setting("ch_last_post_id", "")
+_init_setting("ch_max_seen_id", "0")
 
 
-# -------------------- ابزارهای پایه --------------------
+# ==================== ابزارهای پایه ====================
+def ch_fa_digits(s: str) -> str:
+    """تبدیل اعداد فارسی/عربی به انگلیسی"""
+    table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    return (s or "").translate(table)
+
+
 def ch_target_id():
     val = get_setting("ch_target_id", "")
     if not val:
@@ -4264,6 +4287,7 @@ def ch_set_target(chat):
     set_setting("ch_target_id", str(chat.id))
     set_setting("ch_target_title", getattr(chat, "title", "") or "")
     set_setting("ch_target_username", getattr(chat, "username", "") or "")
+    set_setting("ch_max_seen_id", "0")
 
 
 def ch_track(chat_id: int, message_id: int, kind: str = "post", preview: str = ""):
@@ -4271,6 +4295,11 @@ def ch_track(chat_id: int, message_id: int, kind: str = "post", preview: str = "
         "INSERT OR REPLACE INTO channel_posts (chat_id, message_id, kind, preview, date) VALUES (?,?,?,?,?)",
         (chat_id, message_id, kind, (preview or "")[:120], time.time()),
     )
+    try:
+        if int(get_setting("ch_max_seen_id", "0") or 0) < message_id:
+            set_setting("ch_max_seen_id", str(message_id))
+    except Exception:
+        pass
     row = db_one("SELECT COUNT(*) AS c FROM channel_posts WHERE chat_id=?", (chat_id,))
     if row and row["c"] > CH_TRACK_KEEP:
         db_run(
@@ -4280,7 +4309,7 @@ def ch_track(chat_id: int, message_id: int, kind: str = "post", preview: str = "
         )
 
 
-def ch_untrack(chat_id: int, message_ids):
+def ch_untrack(chat_id, message_ids):
     for mid in message_ids:
         db_run("DELETE FROM channel_posts WHERE chat_id=? AND message_id=?", (chat_id, mid))
 
@@ -4290,24 +4319,40 @@ def ch_tracked_count(chat_id) -> int:
     return row["c"] if row else 0
 
 
-def ch_last_ids(chat_id, n: int):
-    rows = db_all(
-        "SELECT message_id FROM channel_posts WHERE chat_id=? ORDER BY message_id DESC LIMIT ?",
-        (chat_id, n),
-    )
-    return [r["message_id"] for r in rows]
-
-
 def ch_max_id(chat_id):
     row = db_one("SELECT MAX(message_id) AS m FROM channel_posts WHERE chat_id=?", (chat_id,))
-    return row["m"] if row and row["m"] else None
+    tracked = row["m"] if row and row["m"] else 0
+    try:
+        seen = int(get_setting("ch_max_seen_id", "0") or 0)
+    except Exception:
+        seen = 0
+    return max(tracked, seen) or None
 
 
-async def ch_delete_ids(context: ContextTypes.DEFAULT_TYPE, chat_id, ids, quiet_missing=True):
-    """حذف دسته‌ای با fallback به حذف تک‌تک. خروجی: (موفق، ناموفق)"""
+async def ch_probe_max_id(context: ContextTypes.DEFAULT_TYPE, tid):
+    """🔑 قلب راه‌حل: آخرین آیدی پیام کانال را خودکار پیدا می‌کند.
+
+    یک پیام موقت به کانال می‌فرستد (آیدی آن = آخرین آیدی کانال)، بلافاصله
+    حذفش می‌کند، و عدد را برمی‌گرداند. با این ترفند بات می‌تواند پیام‌های
+    قدیمی‌تر از خودش را هم حذف کند، بدون اینکه کاربر عددی وارد کند.
+    """
+    probe = await context.bot.send_message(
+        chat_id=tid, text="⏳", disable_notification=True
+    )
+    mid = probe.message_id
+    try:
+        await context.bot.delete_message(tid, mid)
+    except Exception:
+        pass
+    set_setting("ch_max_seen_id", str(mid))
+    return mid - 1
+
+
+async def ch_delete_ids(context: ContextTypes.DEFAULT_TYPE, chat_id, ids):
+    """حذف دسته‌ای با fallback تک‌تک. خروجی: (موفق، ناموفق)"""
     ok = 0
     fail = 0
-    ids = [int(i) for i in ids]
+    ids = [int(i) for i in ids if int(i) > 0]
     for i in range(0, len(ids), CH_BATCH):
         chunk = ids[i:i + CH_BATCH]
         done = False
@@ -4317,24 +4362,75 @@ async def ch_delete_ids(context: ContextTypes.DEFAULT_TYPE, chat_id, ids, quiet_
                 ok += len(chunk)
                 ch_untrack(chat_id, chunk)
                 done = True
-            except Exception as e:
-                if not quiet_missing:
-                    logger.info("bulk delete failed, falling back: %s", e)
+            except Exception:
+                pass
         if not done:
             for mid in chunk:
                 try:
                     await context.bot.delete_message(chat_id=chat_id, message_id=mid)
                     ok += 1
-                    ch_untrack(chat_id, [mid])
                 except Exception:
                     fail += 1
-                    ch_untrack(chat_id, [mid])
+                ch_untrack(chat_id, [mid])
         await asyncio.sleep(CH_BATCH_SLEEP)
     return ok, fail
 
 
+async def ch_run_delete(query, context, tid, ids, title="حذف پیام‌ها"):
+    """حذف طولانی با نوار پیشرفت و دکمهٔ توقف"""
+    total = len(ids)
+    context.bot_data["ch_stop"] = False
+    stop_kb = InlineKeyboardMarkup([[InlineKeyboardButton("⏹ توقف", callback_data="chp_stop", style="danger")]])
+    ok = fail = 0
+    started = time.time()
+    last_shown = -1
+
+    for i in range(0, total, CH_BATCH):
+        if context.bot_data.get("ch_stop"):
+            break
+        chunk = ids[i:i + CH_BATCH]
+        o, f = await ch_delete_ids(context, tid, chunk)
+        ok += o
+        fail += f
+        done = i + len(chunk)
+        if done - last_shown >= CH_PROGRESS_EVERY or done >= total:
+            last_shown = done
+            pct = int(done * 100 / total) if total else 100
+            bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
+            try:
+                await query.edit_message_text(
+                    f"⏳ {title}\n━━━━━━━━━━━━━━━\n{bar} {pct}%\n"
+                    f"بررسی‌شده: {done} از {total}\n✅ حذف‌شده: {ok}\n⏱ {int(time.time() - started)} ثانیه",
+                    reply_markup=stop_kb,
+                )
+            except Exception:
+                pass
+
+    stopped = context.bot_data.get("ch_stop")
+    context.bot_data["ch_stop"] = False
+    took = round(time.time() - started, 1)
+    await safe_edit(
+        query,
+        "\n".join([
+            ("⏹ متوقف شد" if stopped else "✅ تمام شد"),
+            "━━━━━━━━━━━━━━━",
+            f"🗑 حذف‌شده: {ok}",
+            f"➖ خالی/قبلاً حذف‌شده: {fail}",
+            f"⏱ زمان: {took} ثانیه",
+        ]),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗑 حذف بیشتر", callback_data="chp_del")],
+            [InlineKeyboardButton("🔙 پنل", callback_data="chp_home")],
+        ]),
+    )
+
+
+async def ch_stop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.bot_data["ch_stop"] = True
+    await update.callback_query.answer("⏹ در حال توقف...")
+
+
 async def ch_guard(update: Update) -> bool:
-    """فقط مالک ربات"""
     uid = update.effective_user.id
     if not is_owner(uid):
         if update.callback_query:
@@ -4348,24 +4444,22 @@ async def ch_guard(update: Update) -> bool:
 async def ch_need_target(update: Update) -> bool:
     if ch_target_id():
         return True
-    text = "❗️ اول کانال هدف را تنظیم کن.\n\nاز دکمهٔ «تنظیم/تغییر کانال» استفاده کن."
+    text = "❗️ اول کانال هدف را تنظیم کن."
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔗 تنظیم کانال", callback_data="chp_setch")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="chp_home")],
     ])
     if update.callback_query:
         await safe_edit(update.callback_query, text, reply_markup=kb)
-    else:
+    elif update.message:
         await update.message.reply_text(text, reply_markup=kb)
     return False
 
 
-# -------------------- ردیابی خودکار پست‌های کانال --------------------
+# ==================== ردیابی خودکار ====================
 async def ch_post_tracker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    if not msg or not msg.chat:
-        return
-    if msg.chat.type not in ("channel",):
+    if not msg or not msg.chat or msg.chat.type != "channel":
         return
     target = ch_target_id()
     if target and str(msg.chat.id) != str(target):
@@ -4387,44 +4481,75 @@ async def ch_post_tracker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ch_track(msg.chat.id, msg.message_id, kind, preview)
 
 
-# -------------------- منوی اصلی پنل --------------------
+async def ch_member_tracker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """هر جوین/لفت در کانال را خودکار ثبت می‌کند تا لیست اعضا ساخته شود."""
+    cmu = update.chat_member or update.my_chat_member
+    if not cmu or not cmu.chat:
+        return
+    target = ch_target_id()
+    if target and str(cmu.chat.id) != str(target):
+        return
+    new = cmu.new_chat_member
+    user = getattr(new, "user", None)
+    if user is None or user.is_bot:
+        return
+    status = getattr(new, "status", "")
+    if status in ("member", "administrator", "creator", "restricted"):
+        ch_member_save(cmu.chat.id, user, status)
+    else:
+        db_run("DELETE FROM channel_members WHERE chat_id=? AND user_id=?", (cmu.chat.id, user.id))
+
+
+def ch_member_save(chat_id, user, status="member"):
+    db_run(
+        "INSERT OR REPLACE INTO channel_members (chat_id, user_id, username, name, status, date) "
+        "VALUES (?,?,?,?,?,?)",
+        (chat_id, user.id, getattr(user, "username", "") or "",
+         (getattr(user, "full_name", "") or getattr(user, "first_name", "") or "")[:64],
+         status, time.time()),
+    )
+
+
+def ch_members_count(chat_id) -> int:
+    row = db_one("SELECT COUNT(*) AS c FROM channel_members WHERE chat_id=?", (chat_id,))
+    return row["c"] if row else 0
+
+
+# ==================== منوی اصلی ====================
 def ch_home_kb():
-    silent = "🔇 روشن" if get_setting("ch_post_silent") == "1" else "🔔 خاموش"
-    pin = "📌 روشن" if get_setting("ch_post_pin") == "1" else "📌 خاموش"
+    silent = "🔇" if get_setting("ch_post_silent") == "1" else "🔔"
+    pin = "✅" if get_setting("ch_post_pin") == "1" else "❌"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑 حذف پیام‌ها", callback_data="chp_del")],
+        [InlineKeyboardButton("👥 اعضا (شناسایی و حذف)", callback_data="chp_members")],
         [InlineKeyboardButton("✍️ ارسال پست به کانال", callback_data="chp_post")],
-        [InlineKeyboardButton("👥 مدیریت اعضا", callback_data="chp_members")],
         [InlineKeyboardButton("⚙️ تنظیمات کانال", callback_data="chp_settings")],
         [
-            InlineKeyboardButton(f"بی‌صدا: {silent}", callback_data="chp_tg_silent"),
-            InlineKeyboardButton(f"پین خودکار: {pin}", callback_data="chp_tg_pin"),
+            InlineKeyboardButton(f"بی‌صدا {silent}", callback_data="chp_tg_silent"),
+            InlineKeyboardButton(f"پین خودکار {pin}", callback_data="chp_tg_pin"),
         ],
         [
             InlineKeyboardButton("📊 آمار", callback_data="chp_stats"),
             InlineKeyboardButton("🧪 تست دسترسی", callback_data="chp_perms"),
         ],
         [InlineKeyboardButton("🔗 تنظیم/تغییر کانال", callback_data="chp_setch")],
-        [InlineKeyboardButton("❌ بستن پنل", callback_data="chp_close", style="danger")],
+        [InlineKeyboardButton("❌ بستن", callback_data="chp_close", style="danger")],
     ])
 
 
 def ch_home_text() -> str:
     tid = ch_target_id()
-    tracked = ch_tracked_count(tid) if tid else 0
-    last = ch_max_id(tid) if tid else None
     autodel = get_setting("ch_autodel_min", "0")
-    lines = [
+    return "\n".join([
         "📢 پنل مدیریت کانال",
         "━━━━━━━━━━━━━━━",
-        f"کانال هدف: {ch_target_label()}",
-        f"پیام‌های ردیابی‌شده: {tracked}",
-        f"آخرین آیدی پیام: {last if last else '—'}",
-        f"حذف خودکار پست‌ها: {(autodel + ' دقیقه') if autodel != '0' else 'خاموش'}",
+        f"کانال: {ch_target_label()}",
+        f"آخرین آیدی شناخته‌شده: {ch_max_id(tid) or '—'}",
+        f"اعضای شناسایی‌شده: {ch_members_count(tid) if tid else 0}",
+        f"حذف خودکار پست: {(autodel + ' دقیقه') if autodel != '0' else 'خاموش'}",
         "━━━━━━━━━━━━━━━",
         "یکی از بخش‌ها را انتخاب کن 👇",
-    ]
-    return "\n".join(lines)
+    ])
 
 
 async def ch_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4450,7 +4575,7 @@ async def ch_close_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await query.message.delete()
     except Exception:
-        await safe_edit(query, "پنل بسته شد. برای باز کردن دوباره /kir را بزن.")
+        await safe_edit(query, "پنل بسته شد. برای باز کردن /kir را بزن.")
 
 
 async def ch_toggle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4463,22 +4588,23 @@ async def ch_toggle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_edit(query, ch_home_text(), reply_markup=ch_home_kb())
 
 
-# -------------------- تنظیم کانال هدف --------------------
+# ==================== تنظیم کانال ====================
 async def ch_setch_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ch_guard(update):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    txt = (
+    await safe_edit(
+        query,
         "🔗 تنظیم کانال هدف\n\n"
-        "یکی از این کارها را انجام بده:\n"
-        "۱) یک پست از کانال را همینجا فوروارد کن (مطمئن‌ترین راه)\n"
-        "۲) یوزرنیم کانال را بفرست، مثل: @mychannel\n"
-        "۳) آیدی عددی کانال را بفرست، مثل: -1001234567890\n\n"
+        "یکی از این‌ها را بفرست:\n"
+        "۱) یک پست از کانال را فوروارد کن (بهترین راه)\n"
+        "۲) یوزرنیم کانال: @mychannel\n"
+        "۳) آیدی عددی: -1001234567890\n\n"
         f"کانال فعلی: {ch_target_label()}\n\n"
-        "⚠️ بات باید در کانال ادمین باشد با دسترسی حذف پیام و ارسال پیام."
+        "⚠️ بات باید ادمین کانال باشد با دسترسی: ارسال پیام، حذف پیام، افزودن اعضا.",
+        reply_markup=cancel_kb(),
     )
-    await safe_edit(query, txt, reply_markup=cancel_kb())
     return CH_SET_TARGET
 
 
@@ -4495,24 +4621,23 @@ async def ch_setch_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if fwd is not None:
         chat_ref = fwd.id
     elif msg.text:
-        raw = msg.text.strip()
-        chat_ref = raw if raw.startswith("@") else raw
-        if raw.startswith("https://t.me/"):
-            chat_ref = "@" + raw.rstrip("/").split("/")[-1]
-        elif not raw.startswith("@") and (raw.lstrip("-").isdigit()):
+        raw = ch_fa_digits(msg.text.strip())
+        if raw.startswith("https://t.me/") or raw.startswith("t.me/"):
+            tail = raw.rstrip("/").split("/")[-1]
+            chat_ref = tail if tail.startswith("-") else "@" + tail.lstrip("@")
+        elif raw.lstrip("-").isdigit():
             chat_ref = int(raw)
-        elif not raw.startswith("@"):
-            chat_ref = "@" + raw
+        else:
+            chat_ref = "@" + raw.lstrip("@")
 
     if chat_ref is None:
-        await msg.reply_text("❌ نتونستم کانال رو تشخیص بدم. یک پست فوروارد کن یا یوزرنیم/آیدی بفرست.",
-                             reply_markup=cancel_kb())
+        await msg.reply_text("❌ کانال تشخیص داده نشد. یک پست فوروارد کن.", reply_markup=cancel_kb())
         return CH_SET_TARGET
 
     try:
         chat = await context.bot.get_chat(chat_ref)
     except Exception as e:
-        await msg.reply_text(f"❌ دسترسی به کانال ممکن نشد:\n{e}\n\nمطمئن شو بات ادمین کانال هست.",
+        await msg.reply_text(f"❌ دسترسی ممکن نشد:\n{e}\n\nمطمئن شو بات ادمین کانال است.",
                              reply_markup=cancel_kb())
         return CH_SET_TARGET
 
@@ -4522,9 +4647,8 @@ async def ch_setch_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = me.status
     except Exception:
         status = "نامعلوم"
-
     await msg.reply_text(
-        f"✅ کانال هدف تنظیم شد.\n\n{ch_target_label()}\nوضعیت بات در کانال: {status}",
+        f"✅ کانال تنظیم شد.\n\n{ch_target_label()}\nوضعیت بات: {status}",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 پنل", callback_data="chp_home")]]),
     )
     return ConversationHandler.END
@@ -4538,25 +4662,22 @@ async def ch_perms_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ch_need_target(update):
         return
     tid = ch_target_id()
-    lines = ["🧪 تست دسترسی بات در کانال", "━━━━━━━━━━━━━━━"]
+    lines = ["🧪 تست دسترسی بات", "━━━━━━━━━━━━━━━"]
     try:
         me = await context.bot.get_chat_member(tid, context.bot.id)
         lines.append(f"وضعیت: {me.status}")
-        checks = [
+        for label, val in [
             ("ارسال پیام", getattr(me, "can_post_messages", None)),
             ("ویرایش پیام", getattr(me, "can_edit_messages", None)),
             ("حذف پیام", getattr(me, "can_delete_messages", None)),
-            ("محدود/حذف اعضا", getattr(me, "can_restrict_members", None)),
+            ("حذف/محدودسازی اعضا", getattr(me, "can_restrict_members", None)),
             ("دعوت کاربر", getattr(me, "can_invite_users", None)),
             ("مدیریت کانال", getattr(me, "can_manage_chat", None)),
-        ]
-        for label, val in checks:
-            mark = "✅" if val else ("❌" if val is False else "—")
-            lines.append(f"{mark} {label}")
+        ]:
+            lines.append(f"{'✅' if val else ('❌' if val is False else '—')} {label}")
     except Exception as e:
         lines.append(f"❌ خطا: {e}")
-    lines.append("━━━━━━━━━━━━━━━")
-    lines.append("اگر چیزی ❌ است، در تنظیمات ادمین‌های کانال آن دسترسی را به بات بده.")
+    lines += ["━━━━━━━━━━━━━━━", "هر چیزی ❌ است را در تنظیمات ادمین‌های کانال به بات بده."]
     await safe_edit(query, "\n".join(lines),
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 پنل", callback_data="chp_home")]]))
 
@@ -4575,63 +4696,39 @@ async def ch_stats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
     banned = db_one("SELECT COUNT(*) AS c FROM channel_bans WHERE chat_id=?", (tid,))
-    kinds = db_all(
-        "SELECT kind, COUNT(*) AS c FROM channel_posts WHERE chat_id=? GROUP BY kind ORDER BY c DESC",
-        (tid,),
+    await safe_edit(
+        query,
+        "\n".join([
+            "📊 آمار کانال",
+            "━━━━━━━━━━━━━━━",
+            f"کانال: {ch_target_label()}",
+            f"👥 اعضای واقعی کانال: {members}",
+            f"🔍 اعضای شناسایی‌شده در بات: {ch_members_count(tid)}",
+            f"📝 پیام‌های ردیابی‌شده: {ch_tracked_count(tid)}",
+            f"🔢 آخرین آیدی: {ch_max_id(tid) or '—'}",
+            f"🚫 بن‌شده‌ها: {banned['c'] if banned else 0}",
+        ]),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 پنل", callback_data="chp_home")]]),
     )
-    lines = [
-        "📊 آمار کانال",
-        "━━━━━━━━━━━━━━━",
-        f"کانال: {ch_target_label()}",
-        f"تعداد اعضا: {members}",
-        f"پیام‌های ردیابی‌شده: {ch_tracked_count(tid)}",
-        f"آخرین آیدی پیام: {ch_max_id(tid) or '—'}",
-        f"کاربران بن‌شده (ثبت‌شده در بات): {banned['c'] if banned else 0}",
-    ]
-    if kinds:
-        lines.append("━━━━━━━━━━━━━━━")
-        lines.append("تفکیک نوع پیام‌ها:")
-        for r in kinds:
-            lines.append(f"• {r['kind']}: {r['c']}")
-    await safe_edit(query, "\n".join(lines),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 پنل", callback_data="chp_home")]]))
 
 
-# ==================== 🗑 بخش حذف پیام ====================
+# ==================== 🗑 حذف پیام‌ها ====================
 def ch_del_kb():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("۵ تا", callback_data="chp_dn_5"),
             InlineKeyboardButton("۱۰ تا", callback_data="chp_dn_10"),
-            InlineKeyboardButton("۲۵ تا", callback_data="chp_dn_25"),
-        ],
-        [
             InlineKeyboardButton("۵۰ تا", callback_data="chp_dn_50"),
             InlineKeyboardButton("۱۰۰ تا", callback_data="chp_dn_100"),
-            InlineKeyboardButton("۲۵۰ تا", callback_data="chp_dn_250"),
+        ],
+        [
+            InlineKeyboardButton("۵۰۰ تا", callback_data="chp_dn_500"),
+            InlineKeyboardButton("۱۰۰۰ تا", callback_data="chp_dn_1000"),
+            InlineKeyboardButton("۵۰۰۰ تا", callback_data="chp_dn_5000"),
         ],
         [InlineKeyboardButton("🔢 تعداد دلخواه", callback_data="chp_dcustom")],
-        [InlineKeyboardButton("🎯 حذف با آیدی پیام", callback_data="chp_did")],
-        [InlineKeyboardButton("📏 حذف بازهٔ آیدی", callback_data="chp_drange")],
-        [InlineKeyboardButton("🧨 حذف همهٔ پیام‌های ردیابی‌شده", callback_data="chp_dall", style="danger")],
-        [InlineKeyboardButton("🧹 جاروی کور (پیام‌های قدیمی)", callback_data="chp_dpurge")],
+        [InlineKeyboardButton("🔥 خالی کردن کل کانال", callback_data="chp_dwipe", style="danger")],
+        [InlineKeyboardButton("🎯 حذف یک پست خاص (لینک/آیدی)", callback_data="chp_did")],
         [InlineKeyboardButton("🔙 پنل", callback_data="chp_home")],
-    ])
-
-
-def ch_del_text() -> str:
-    tid = ch_target_id()
-    return "\n".join([
-        "🗑 حذف پیام‌های کانال",
-        "━━━━━━━━━━━━━━━",
-        f"کانال: {ch_target_label()}",
-        f"قابل حذف دقیق (ردیابی‌شده): {ch_tracked_count(tid) if tid else 0}",
-        f"آخرین آیدی: {ch_max_id(tid) or '—'}",
-        "━━━━━━━━━━━━━━━",
-        "ℹ️ بات فقط پیام‌هایی را دقیق می‌شناسد که بعد از نصب این پنل در کانال ثبت شده‌اند.",
-        "برای پیام‌های قدیمی‌تر از «جاروی کور» یا «حذف بازهٔ آیدی» استفاده کن.",
-        "",
-        "چند پیام آخر حذف شود؟",
     ])
 
 
@@ -4642,47 +4739,66 @@ async def ch_del_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if not await ch_need_target(update):
         return
-    await safe_edit(query, ch_del_text(), reply_markup=ch_del_kb())
-
-
-def ch_confirm_kb(mode: str, arg: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"chp_ok_{mode}_{arg}", style="danger")],
-        [InlineKeyboardButton("🚫 نه، بی‌خیال", callback_data="chp_del")],
-    ])
+    await safe_edit(
+        query,
+        "\n".join([
+            "🗑 حذف پیام‌های کانال",
+            "━━━━━━━━━━━━━━━",
+            f"کانال: {ch_target_label()}",
+            "━━━━━━━━━━━━━━━",
+            "✅ نیازی به وارد کردن هیچ عددی نیست.",
+            "بات خودش آخرین پیام کانال را پیدا می‌کند و از همان‌جا",
+            "رو به عقب حذف می‌کند — پیام‌های قدیمی‌تر از خود بات هم پاک می‌شوند.",
+            "",
+            "چند پیام آخر حذف شود؟",
+        ]),
+        reply_markup=ch_del_kb(),
+    )
 
 
 async def ch_del_n_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """حذف N پیام آخر — با شناسایی خودکار آخرین آیدی"""
     if not await ch_guard(update):
         return
     query = update.callback_query
     await query.answer()
-    n = int(query.data.rsplit("_", 1)[1])
-    await ch_show_confirm_last(query, n)
-
-
-async def ch_show_confirm_last(query, n: int):
     tid = ch_target_id()
-    ids = ch_last_ids(tid, n)
-    if not ids:
+    if not tid:
+        await ch_need_target(update)
+        return
+    n = int(query.data.rsplit("_", 1)[1])
+    await safe_edit(query, "🔍 در حال پیدا کردن آخرین پیام کانال...")
+    try:
+        top = await ch_probe_max_id(context, tid)
+    except Exception as e:
         await safe_edit(
             query,
-            "❌ هیچ پیام ردیابی‌شده‌ای برای این کانال نیست.\n\n"
-            "یعنی بعد از نصب پنل، پستی در کانال ثبت نشده. از «حذف بازهٔ آیدی» یا «جاروی کور» استفاده کن.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="chp_del")]]),
+            f"❌ نشد به کانال دسترسی بگیرم:\n{e}\n\n"
+            "بات باید در کانال ادمین باشد با دسترسی «ارسال پیام» و «حذف پیام».",
+            reply_markup=ch_del_kb(),
         )
         return
-    txt = "\n".join([
-        "⚠️ تأیید حذف",
-        "━━━━━━━━━━━━━━━",
-        f"کانال: {ch_target_label()}",
-        f"تعداد درخواستی: {n}",
-        f"تعداد واقعی قابل حذف: {len(ids)}",
-        f"محدودهٔ آیدی: {min(ids)} تا {max(ids)}",
-        "━━━━━━━━━━━━━━━",
-        "❗️ این کار برگشت‌پذیر نیست. مطمئنی؟",
-    ])
-    await safe_edit(query, txt, reply_markup=ch_confirm_kb("last", str(n)))
+    if top < 1:
+        await safe_edit(query, "❌ کانال خالی است.", reply_markup=ch_del_kb())
+        return
+    low = max(1, top - n + 1)
+    ids = list(range(top, low - 1, -1))
+    await safe_edit(
+        query,
+        "\n".join([
+            "⚠️ تأیید حذف",
+            "━━━━━━━━━━━━━━━",
+            f"کانال: {ch_target_label()}",
+            f"از آخرین پیام ({top}) رو به عقب",
+            f"تعداد: {len(ids)} پیام",
+            "━━━━━━━━━━━━━━━",
+            "❗️ برگشت‌پذیر نیست. مطمئنی؟",
+        ]),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"chp_go_{low}_{top}", style="danger")],
+            [InlineKeyboardButton("🚫 لغو", callback_data="chp_del")],
+        ]),
+    )
 
 
 async def ch_del_custom_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4690,43 +4806,104 @@ async def ch_del_custom_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    tid = ch_target_id()
-    await safe_edit(
-        query,
-        f"🔢 چند پیام آخر حذف شود؟\n\nعدد بفرست (۱ تا {ch_tracked_count(tid)}).",
-        reply_markup=cancel_kb(),
-    )
+    await safe_edit(query, "🔢 چند پیام آخر حذف شود؟\n\nفقط یک عدد بفرست (مثلاً 300).",
+                    reply_markup=cancel_kb())
     return CH_DEL_COUNT
 
 
 async def ch_del_custom_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id):
         return ConversationHandler.END
-    raw = (update.message.text or "").strip().replace(",", "")
-    raw = ch_fa_digits(raw)
+    raw = ch_fa_digits((update.message.text or "").strip().replace(",", ""))
     if not raw.isdigit() or int(raw) < 1:
         await update.message.reply_text("❌ فقط عدد مثبت بفرست.", reply_markup=cancel_kb())
         return CH_DEL_COUNT
     n = int(raw)
     tid = ch_target_id()
-    ids = ch_last_ids(tid, n)
-    if not ids:
-        await update.message.reply_text(
-            "❌ پیام ردیابی‌شده‌ای نیست.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="chp_del")]]),
-        )
+    notice = await update.message.reply_text("🔍 در حال پیدا کردن آخرین پیام کانال...")
+    try:
+        top = await ch_probe_max_id(context, tid)
+    except Exception as e:
+        await notice.edit_text(f"❌ دسترسی به کانال ممکن نشد:\n{e}")
         return ConversationHandler.END
-    txt = "\n".join([
-        "⚠️ تأیید حذف",
-        "━━━━━━━━━━━━━━━",
-        f"تعداد درخواستی: {n}",
-        f"تعداد واقعی قابل حذف: {len(ids)}",
-        f"محدودهٔ آیدی: {min(ids)} تا {max(ids)}",
-        "━━━━━━━━━━━━━━━",
-        "❗️ برگشت‌پذیر نیست. مطمئنی؟",
-    ])
-    await update.message.reply_text(txt, reply_markup=ch_confirm_kb("last", str(n)))
+    low = max(1, top - n + 1)
+    await notice.edit_text(
+        "\n".join([
+            "⚠️ تأیید حذف",
+            "━━━━━━━━━━━━━━━",
+            f"از آخرین پیام ({top}) رو به عقب",
+            f"تعداد: {top - low + 1} پیام",
+            "━━━━━━━━━━━━━━━",
+            "❗️ برگشت‌پذیر نیست. مطمئنی؟",
+        ]),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"chp_go_{low}_{top}", style="danger")],
+            [InlineKeyboardButton("🚫 لغو", callback_data="chp_del")],
+        ]),
+    )
     return ConversationHandler.END
+
+
+async def ch_wipe_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """خالی کردن کل کانال با یک دکمه"""
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    tid = ch_target_id()
+    if not tid:
+        await ch_need_target(update)
+        return
+    await safe_edit(query, "🔍 در حال محاسبهٔ حجم کانال...")
+    try:
+        top = await ch_probe_max_id(context, tid)
+    except Exception as e:
+        await safe_edit(query, f"❌ دسترسی ممکن نشد:\n{e}", reply_markup=ch_del_kb())
+        return
+    if top < 1:
+        await safe_edit(query, "❌ کانال خالی است.", reply_markup=ch_del_kb())
+        return
+    eta = int(top / CH_BATCH * (CH_BATCH_SLEEP + 0.15)) + 1
+    await safe_edit(
+        query,
+        "\n".join([
+            "🔥🔥 خالی کردن کامل کانال",
+            "━━━━━━━━━━━━━━━",
+            f"کانال: {ch_target_label()}",
+            f"از آیدی {top} تا 1",
+            f"تعداد کل: {top} پیام",
+            f"زمان تقریبی: حدود {eta} ثانیه",
+            "━━━━━━━━━━━━━━━",
+            "❗️❗️❗️ همهٔ پست‌های کانال از اول تا آخر پاک می‌شوند.",
+            "این کار به هیچ وجه قابل بازگشت نیست!",
+            "",
+            "در طول کار دکمهٔ «توقف» داری.",
+        ]),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔥 بله، همه را پاک کن", callback_data=f"chp_go_1_{top}", style="danger")],
+            [InlineKeyboardButton("🚫 لغو", callback_data="chp_del")],
+        ]),
+    )
+
+
+async def ch_go_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اجرای حذف بازه (از top به سمت low) با نوار پیشرفت"""
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    tid = ch_target_id()
+    if not tid:
+        await ch_need_target(update)
+        return
+    try:
+        _, low, top = query.data.rsplit("_", 2)
+        low, top = int(low), int(top)
+    except Exception:
+        await safe_edit(query, "❌ درخواست نامعتبر.", reply_markup=ch_del_kb())
+        return
+    ids = list(range(top, low - 1, -1))
+    await ch_run_delete(query, context, tid, ids, title=f"حذف {len(ids)} پیام")
 
 
 async def ch_del_id_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4736,10 +4913,10 @@ async def ch_del_id_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await safe_edit(
         query,
-        "🎯 حذف با آیدی پیام\n\n"
-        "آیدی عددی پیام را بفرست. چند آیدی را هم می‌توانی با فاصله یا کاما بفرستی:\n"
-        "مثال: 154 155 160\n\n"
-        "راه ساده‌تر: لینک پست را بفرست، مثل https://t.me/mychannel/154",
+        "🎯 حذف پست خاص\n\n"
+        "لینک پست را بفرست:\nhttps://t.me/mychannel/154\n\n"
+        "یا آیدی عددی. چند تا هم می‌شود (با فاصله).\n"
+        "همچنین می‌توانی خود پست را از کانال فوروارد کنی.",
         reply_markup=cancel_kb(),
     )
     return CH_DEL_BY_ID
@@ -4748,151 +4925,89 @@ async def ch_del_id_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ch_del_id_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id):
         return ConversationHandler.END
-    raw = ch_fa_digits((update.message.text or "").strip())
-    ids = []
-    for token in re.split(r"[\s,]+", raw):
-        if not token:
-            continue
-        m = re.search(r"/(\d+)/?$", token)
-        if m:
-            ids.append(int(m.group(1)))
-        elif token.isdigit():
-            ids.append(int(token))
-    if not ids:
-        await update.message.reply_text("❌ آیدی معتبری پیدا نشد. دوباره بفرست.", reply_markup=cancel_kb())
-        return CH_DEL_BY_ID
+    msg = update.message
     tid = ch_target_id()
+    ids = []
+
+    fwd_id = getattr(msg, "forward_from_message_id", None)
+    if fwd_id is None:
+        origin = getattr(msg, "forward_origin", None)
+        fwd_id = getattr(origin, "message_id", None) if origin else None
+    if fwd_id:
+        ids.append(int(fwd_id))
+    else:
+        raw = ch_fa_digits((msg.text or "").strip())
+        for token in re.split(r"[\s,]+", raw):
+            if not token:
+                continue
+            m = re.search(r"/(\d+)/?$", token)
+            if m:
+                ids.append(int(m.group(1)))
+            elif token.isdigit():
+                ids.append(int(token))
+
+    if not ids:
+        await msg.reply_text("❌ آیدی پیدا نشد. لینک پست را بفرست یا پست را فوروارد کن.",
+                             reply_markup=cancel_kb())
+        return CH_DEL_BY_ID
+
     ok, fail = await ch_delete_ids(context, tid, ids)
-    await update.message.reply_text(
-        f"🗑 نتیجه حذف\n━━━━━━━━━━━━━━━\n✅ حذف‌شده: {ok}\n❌ ناموفق: {fail}\n\n"
-        "«ناموفق» یعنی پیام وجود نداشت یا قبلاً حذف شده بود.",
+    await msg.reply_text(
+        f"🗑 نتیجه\n━━━━━━━━━━━━━━━\n✅ حذف‌شده: {ok}\n➖ ناموفق: {fail}",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="chp_del")]]),
     )
     return ConversationHandler.END
 
 
-async def ch_del_range_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ch_guard(update):
-        return ConversationHandler.END
-    query = update.callback_query
-    await query.answer()
-    last = ch_max_id(ch_target_id())
-    await safe_edit(
-        query,
-        "📏 حذف بازهٔ آیدی\n\n"
-        "بازه را با خط تیره بفرست، مثال:\n100-250\n\n"
-        f"آخرین آیدی شناخته‌شده: {last or '—'}\n"
-        f"سقف هر بازه: {CH_PURGE_MAX} پیام.",
-        reply_markup=cancel_kb(),
-    )
-    return CH_DEL_RANGE
+# ==================== 👥 اعضا: شناسایی و حذف ====================
+def ch_members_kb(tid):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 اسکن و شناسایی اعضا", callback_data="chp_scan")],
+        [InlineKeyboardButton(f"📋 لیست اعضا و حذف ({ch_members_count(tid) if tid else 0})", callback_data="chp_list_0")],
+        [InlineKeyboardButton("🚫 حذف کاربر (فوروارد/آیدی)", callback_data="chp_ban", style="danger")],
+        [InlineKeyboardButton("👟 اخراج ساده (اجازهٔ برگشت)", callback_data="chp_kick")],
+        [InlineKeyboardButton("♻️ آنبن کاربر", callback_data="chp_unban")],
+        [InlineKeyboardButton("📋 حذف گروهی با لیست آیدی", callback_data="chp_bulk", style="danger")],
+        [InlineKeyboardButton("🗂 لیست بن‌شده‌ها", callback_data="chp_banlist")],
+        [InlineKeyboardButton("🔍 استعلام وضعیت کاربر", callback_data="chp_who")],
+        [InlineKeyboardButton("🔙 پنل", callback_data="chp_home")],
+    ])
 
 
-async def ch_del_range_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update.effective_user.id):
-        return ConversationHandler.END
-    raw = ch_fa_digits((update.message.text or "").strip())
-    m = re.match(r"^(\d+)\s*[-–تا]+\s*(\d+)$", raw)
-    if not m:
-        await update.message.reply_text("❌ قالب درست نیست. مثال: 100-250", reply_markup=cancel_kb())
-        return CH_DEL_RANGE
-    a, b = int(m.group(1)), int(m.group(2))
-    if a > b:
-        a, b = b, a
-    if b - a + 1 > CH_PURGE_MAX:
-        await update.message.reply_text(
-            f"❌ بازه بیش از حد بزرگ است (سقف {CH_PURGE_MAX}). بازهٔ کوچک‌تری بفرست.",
-            reply_markup=cancel_kb(),
-        )
-        return CH_DEL_RANGE
-    await update.message.reply_text(
-        "\n".join([
-            "⚠️ تأیید حذف بازه",
-            "━━━━━━━━━━━━━━━",
-            f"از آیدی {a} تا {b}",
-            f"تعداد: {b - a + 1} پیام",
-            "━━━━━━━━━━━━━━━",
-            "❗️ برگشت‌پذیر نیست. مطمئنی؟",
-        ]),
-        reply_markup=ch_confirm_kb("range", f"{a}-{b}"),
-    )
-    return ConversationHandler.END
-
-
-async def ch_del_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ch_members_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ch_guard(update):
         return
     query = update.callback_query
     await query.answer()
+    if not await ch_need_target(update):
+        return
     tid = ch_target_id()
-    n = ch_tracked_count(tid)
-    if not n:
-        await safe_edit(query, "❌ پیام ردیابی‌شده‌ای نیست.",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="chp_del")]]))
-        return
+    real = "—"
+    try:
+        real = await context.bot.get_chat_member_count(tid)
+    except Exception:
+        pass
     await safe_edit(
         query,
         "\n".join([
-            "🧨 حذف همهٔ پیام‌های ردیابی‌شده",
+            "👥 مدیریت اعضای کانال",
             "━━━━━━━━━━━━━━━",
             f"کانال: {ch_target_label()}",
-            f"تعداد: {n} پیام",
+            f"👤 اعضای واقعی کانال: {real}",
+            f"🔍 شناسایی‌شده تا الان: {ch_members_count(tid)}",
             "━━━━━━━━━━━━━━━",
-            "❗️❗️ این یعنی خالی کردن کانال از تمام پست‌های ثبت‌شده. برگشت‌پذیر نیست!",
+            "برای شروع «🔍 اسکن و شناسایی اعضا» را بزن.",
+            "بات همهٔ کاربرهای خودش را چک می‌کند و هرکس عضو کانال باشد",
+            "در لیست می‌آید — بعد با یک دکمه حذفش می‌کنی.",
+            "",
+            "ℹ️ هر کسی هم از این به بعد جوین/لفت کند خودکار ثبت می‌شود.",
         ]),
-        reply_markup=ch_confirm_kb("all", "0"),
+        reply_markup=ch_members_kb(tid),
     )
 
 
-async def ch_purge_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ch_guard(update):
-        return ConversationHandler.END
-    query = update.callback_query
-    await query.answer()
-    last = ch_max_id(ch_target_id())
-    await safe_edit(
-        query,
-        "🧹 جاروی کور\n\n"
-        "برای پیام‌های قدیمی که بات ثبتشان نکرده. از یک آیدی شروع می‌کند و رو به عقب حذف می‌کند.\n\n"
-        "دو عدد بفرست: آیدی شروع و تعداد\n"
-        "مثال: 500 200\n"
-        "(یعنی از آیدی ۵۰۰ به عقب، ۲۰۰ آیدی)\n\n"
-        f"آخرین آیدی شناخته‌شده: {last or 'نامعلوم'}\n"
-        f"سقف: {CH_PURGE_MAX}",
-        reply_markup=cancel_kb(),
-    )
-    return CH_PURGE
-
-
-async def ch_purge_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update.effective_user.id):
-        return ConversationHandler.END
-    raw = ch_fa_digits((update.message.text or "").strip())
-    parts = [p for p in re.split(r"[\s,]+", raw) if p]
-    if len(parts) != 2 or not all(p.isdigit() for p in parts):
-        await update.message.reply_text("❌ دو عدد بفرست. مثال: 500 200", reply_markup=cancel_kb())
-        return CH_PURGE
-    start, count = int(parts[0]), int(parts[1])
-    if count < 1 or count > CH_PURGE_MAX:
-        await update.message.reply_text(f"❌ تعداد باید بین ۱ و {CH_PURGE_MAX} باشد.", reply_markup=cancel_kb())
-        return CH_PURGE
-    low = max(1, start - count + 1)
-    await update.message.reply_text(
-        "\n".join([
-            "⚠️ تأیید جاروی کور",
-            "━━━━━━━━━━━━━━━",
-            f"از آیدی {start} به عقب تا {low}",
-            f"تعداد تلاش حذف: {start - low + 1}",
-            "━━━━━━━━━━━━━━━",
-            "ℹ️ آیدی‌های خالی یا حذف‌شده خطای بی‌خطر می‌دهند و رد می‌شوند.",
-            "❗️ برگشت‌پذیر نیست. مطمئنی؟",
-        ]),
-        reply_markup=ch_confirm_kb("range", f"{low}-{start}"),
-    )
-    return ConversationHandler.END
-
-
-async def ch_del_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ch_scan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اسکن: همهٔ کاربران بات را چک می‌کند و اعضای کانال را شناسایی می‌کند."""
     if not await ch_guard(update):
         return
     query = update.callback_query
@@ -4902,50 +5017,458 @@ async def ch_del_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ch_need_target(update)
         return
 
-    payload = query.data[len("chp_ok_"):]
-    mode, _, arg = payload.partition("_")
-
-    if mode == "last":
-        ids = ch_last_ids(tid, int(arg))
-    elif mode == "all":
-        ids = ch_last_ids(tid, 10 ** 9)
-    elif mode == "range":
-        a, b = arg.split("-")
-        ids = list(range(int(b), int(a) - 1, -1))
-    else:
-        await safe_edit(query, "❌ درخواست نامعتبر.", reply_markup=ch_del_kb())
+    rows = db_all("SELECT id FROM users ORDER BY id DESC LIMIT ?", (CH_SCAN_LIMIT,))
+    uids = [r["id"] for r in rows]
+    total = len(uids)
+    if not total:
+        await safe_edit(query, "❌ هنوز کاربری در دیتابیس بات نیست.", reply_markup=ch_members_kb(tid))
         return
 
-    if not ids:
-        await safe_edit(query, "❌ چیزی برای حذف نبود.",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="chp_del")]]))
-        return
-
-    await safe_edit(query, f"⏳ در حال حذف {len(ids)} پیام... صبر کن.")
+    context.bot_data["ch_stop"] = False
+    stop_kb = InlineKeyboardMarkup([[InlineKeyboardButton("⏹ توقف", callback_data="chp_stop", style="danger")]])
+    found = gone = 0
     started = time.time()
-    ok, fail = await ch_delete_ids(context, tid, ids)
-    took = round(time.time() - started, 1)
 
+    for i, uid in enumerate(uids, 1):
+        if context.bot_data.get("ch_stop"):
+            break
+        try:
+            m = await context.bot.get_chat_member(tid, uid)
+            if m.status in ("member", "administrator", "creator", "restricted"):
+                ch_member_save(tid, m.user, m.status)
+                found += 1
+            else:
+                db_run("DELETE FROM channel_members WHERE chat_id=? AND user_id=?", (tid, uid))
+                gone += 1
+        except Exception:
+            gone += 1
+        if i % 25 == 0 or i == total:
+            pct = int(i * 100 / total)
+            bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
+            try:
+                await query.edit_message_text(
+                    f"🔍 اسکن اعضا\n━━━━━━━━━━━━━━━\n{bar} {pct}%\n"
+                    f"بررسی‌شده: {i} از {total}\n✅ عضو کانال: {found}\n➖ عضو نیست: {gone}\n"
+                    f"⏱ {int(time.time() - started)} ثانیه",
+                    reply_markup=stop_kb,
+                )
+            except Exception:
+                pass
+        await asyncio.sleep(CH_MEMBER_SLEEP)
+
+    context.bot_data["ch_stop"] = False
     await safe_edit(
         query,
         "\n".join([
-            "🗑 حذف انجام شد",
+            "✅ اسکن تمام شد",
             "━━━━━━━━━━━━━━━",
-            f"✅ حذف‌شده: {ok}",
-            f"❌ ناموفق: {fail}",
-            f"⏱ زمان: {took} ثانیه",
-            f"باقی‌ماندهٔ ردیابی‌شده: {ch_tracked_count(tid)}",
+            f"👤 اعضای شناسایی‌شده: {found}",
+            f"➖ عضو نبودند: {gone}",
+            f"⏱ زمان: {round(time.time() - started, 1)} ثانیه",
             "",
-            "ℹ️ «ناموفق» معمولاً یعنی پیام وجود نداشت، قبلاً حذف شده بود، یا سرویسی بود.",
+            "حالا «📋 لیست اعضا و حذف» را بزن.",
+        ]),
+        reply_markup=ch_members_kb(tid),
+    )
+
+
+async def ch_list_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """لیست اعضا با دکمهٔ حذف مقابل هر نفر + صفحه‌بندی"""
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    tid = ch_target_id()
+    if not tid:
+        await ch_need_target(update)
+        return
+    page = int(query.data.rsplit("_", 1)[1])
+    total = ch_members_count(tid)
+    if not total:
+        await safe_edit(
+            query,
+            "📋 لیست خالی است.\n\nاول «🔍 اسکن و شناسایی اعضا» را بزن.",
+            reply_markup=ch_members_kb(tid),
+        )
+        return
+    pages = max(1, math.ceil(total / CH_PAGE))
+    page = max(0, min(page, pages - 1))
+    rows = db_all(
+        "SELECT user_id, username, name FROM channel_members WHERE chat_id=? "
+        "ORDER BY date DESC LIMIT ? OFFSET ?",
+        (tid, CH_PAGE, page * CH_PAGE),
+    )
+
+    lines = [f"📋 اعضای شناسایی‌شده ({total} نفر)", f"صفحهٔ {page + 1} از {pages}", "━━━━━━━━━━━━━━━"]
+    kb = []
+    for r in rows:
+        tag = f"@{r['username']}" if r["username"] else (r["name"] or str(r["user_id"]))
+        owner_mark = " 👑" if r["user_id"] in OWNER_IDS else ""
+        lines.append(f"• {tag} — {r['user_id']}{owner_mark}")
+        kb.append([InlineKeyboardButton(f"🚫 حذف {tag[:20]}", callback_data=f"chp_kk_{r['user_id']}")])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"chp_list_{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"chp_list_{page + 1}"))
+    if nav:
+        kb.append(nav)
+    kb.append([InlineKeyboardButton("🧨 حذف همهٔ این اعضا", callback_data="chp_kkall", style="danger")])
+    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="chp_members")])
+    await safe_edit(query, "\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def ch_kick_one_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """حذف یک عضو با یک کلیک از لیست"""
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    tid = ch_target_id()
+    uid = int(query.data.rsplit("_", 1)[1])
+    if uid in OWNER_IDS:
+        await query.answer("⛔ نمی‌شود مالک ربات را حذف کرد.", show_alert=True)
+        return
+    try:
+        await context.bot.ban_chat_member(tid, uid)
+        row = db_one("SELECT username FROM channel_members WHERE chat_id=? AND user_id=?", (tid, uid))
+        db_run(
+            "INSERT OR REPLACE INTO channel_bans (chat_id, user_id, username, date) VALUES (?,?,?,?)",
+            (tid, uid, (row["username"] if row else "") or "", time.time()),
+        )
+        db_run("DELETE FROM channel_members WHERE chat_id=? AND user_id=?", (tid, uid))
+        await query.answer("🚫 حذف شد")
+    except Exception as e:
+        await query.answer(f"❌ {e}"[:190], show_alert=True)
+        return
+    query.data = "chp_list_0"
+    await ch_list_cb(update, context)
+
+
+async def ch_kick_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    tid = ch_target_id()
+    n = ch_members_count(tid)
+    await safe_edit(
+        query,
+        "\n".join([
+            "🧨 حذف همهٔ اعضای شناسایی‌شده",
+            "━━━━━━━━━━━━━━━",
+            f"تعداد: {n} نفر",
+            f"کانال: {ch_target_label()}",
+            "━━━━━━━━━━━━━━━",
+            "❗️ همه از کانال بیرون و بن می‌شوند (مالک ربات مستثنی است).",
+            "مطمئنی؟",
         ]),
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🗑 حذف بیشتر", callback_data="chp_del")],
-            [InlineKeyboardButton("🔙 پنل", callback_data="chp_home")],
+            [InlineKeyboardButton("🧨 بله، همه را حذف کن", callback_data="chp_kkallok", style="danger")],
+            [InlineKeyboardButton("🚫 لغو", callback_data="chp_members")],
         ]),
     )
 
 
-# ==================== ✍️ ارسال پست به کانال ====================
+async def ch_kick_all_do_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    tid = ch_target_id()
+    rows = db_all("SELECT user_id, username FROM channel_members WHERE chat_id=?", (tid,))
+    targets = [(r["user_id"], r["username"]) for r in rows if r["user_id"] not in OWNER_IDS]
+    total = len(targets)
+    if not total:
+        await safe_edit(query, "❌ کسی در لیست نیست.", reply_markup=ch_members_kb(tid))
+        return
+
+    context.bot_data["ch_stop"] = False
+    stop_kb = InlineKeyboardMarkup([[InlineKeyboardButton("⏹ توقف", callback_data="chp_stop", style="danger")]])
+    ok = fail = 0
+    started = time.time()
+    for i, (uid, uname) in enumerate(targets, 1):
+        if context.bot_data.get("ch_stop"):
+            break
+        try:
+            await context.bot.ban_chat_member(tid, uid)
+            db_run(
+                "INSERT OR REPLACE INTO channel_bans (chat_id, user_id, username, date) VALUES (?,?,?,?)",
+                (tid, uid, uname or "", time.time()),
+            )
+            db_run("DELETE FROM channel_members WHERE chat_id=? AND user_id=?", (tid, uid))
+            ok += 1
+        except Exception:
+            fail += 1
+        if i % 10 == 0 or i == total:
+            pct = int(i * 100 / total)
+            bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
+            try:
+                await query.edit_message_text(
+                    f"🧨 حذف اعضا\n━━━━━━━━━━━━━━━\n{bar} {pct}%\n"
+                    f"{i} از {total}\n✅ حذف‌شده: {ok}\n❌ ناموفق: {fail}",
+                    reply_markup=stop_kb,
+                )
+            except Exception:
+                pass
+        await asyncio.sleep(0.2)
+
+    context.bot_data["ch_stop"] = False
+    await safe_edit(
+        query,
+        f"✅ تمام شد\n━━━━━━━━━━━━━━━\n🚫 حذف‌شده: {ok}\n❌ ناموفق: {fail}\n"
+        f"⏱ {round(time.time() - started, 1)} ثانیه",
+        reply_markup=ch_members_kb(tid),
+    )
+
+
+async def ch_resolve_user(context, msg):
+    fwd = getattr(msg, "forward_from", None)
+    if fwd is not None:
+        return fwd.id, (fwd.username or fwd.first_name or "")
+    origin = getattr(msg, "forward_origin", None)
+    sender = getattr(origin, "sender_user", None) if origin else None
+    if sender is not None:
+        return sender.id, (sender.username or sender.first_name or "")
+
+    raw = ch_fa_digits((msg.text or "").strip())
+    if raw.lstrip("-").isdigit():
+        return int(raw), ""
+    if raw:
+        ref = raw if raw.startswith("@") else "@" + raw.lstrip("@")
+        try:
+            chat = await context.bot.get_chat(ref)
+            return chat.id, (getattr(chat, "username", "") or "")
+        except Exception:
+            return None, ""
+    return None, ""
+
+
+async def ch_ban_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ch_guard(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    kind = {"chp_ban": "ban", "chp_kick": "kick", "chp_unban": "unban", "chp_who": "who"}[query.data]
+    context.user_data["ch_member_action"] = kind
+    titles = {
+        "ban": "🚫 حذف و بن کاربر",
+        "kick": "👟 اخراج ساده",
+        "unban": "♻️ آنبن کاربر",
+        "who": "🔍 استعلام وضعیت",
+    }
+    await safe_edit(
+        query,
+        f"{titles[kind]}\n\n"
+        "کاربر را مشخص کن:\n"
+        "• یک پیام از او را فوروارد کن (بهترین راه)\n"
+        "• یا آیدی عددی بفرست\n"
+        "• یا یوزرنیم: @username",
+        reply_markup=cancel_kb(),
+    )
+    return CH_MEMBER_REF
+
+
+async def ch_member_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return ConversationHandler.END
+    action = context.user_data.get("ch_member_action", "who")
+    tid = ch_target_id()
+    uid, uname = await ch_resolve_user(context, update.message)
+    if not uid:
+        await update.message.reply_text("❌ کاربر پیدا نشد. یک پیام از او را فوروارد کن.",
+                                        reply_markup=cancel_kb())
+        return CH_MEMBER_REF
+
+    back = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 اعضا", callback_data="chp_members")]])
+    label = f"{uid}" + (f" (@{uname})" if uname else "")
+
+    if action == "who":
+        try:
+            m = await context.bot.get_chat_member(tid, uid)
+            info = ["🔍 وضعیت کاربر", "━━━━━━━━━━━━━━━", f"کاربر: {label}", f"وضعیت: {m.status}"]
+            u = getattr(m, "user", None)
+            if u is not None:
+                info.append(f"نام: {u.full_name}")
+                if u.username:
+                    info.append(f"یوزرنیم: @{u.username}")
+            await update.message.reply_text("\n".join(info), reply_markup=back)
+        except Exception as e:
+            await update.message.reply_text(f"❌ استعلام نشد: {e}", reply_markup=back)
+        return ConversationHandler.END
+
+    if action == "unban":
+        try:
+            await context.bot.unban_chat_member(tid, uid, only_if_banned=True)
+            db_run("DELETE FROM channel_bans WHERE chat_id=? AND user_id=?", (tid, uid))
+            await update.message.reply_text(f"♻️ کاربر {label} آنبن شد.", reply_markup=back)
+        except Exception as e:
+            await update.message.reply_text(f"❌ آنبن نشد: {e}", reply_markup=back)
+        return ConversationHandler.END
+
+    if uid in OWNER_IDS:
+        await update.message.reply_text("⛔ نمی‌شود مالک ربات را حذف کرد.", reply_markup=back)
+        return ConversationHandler.END
+
+    context.user_data["ch_member_uid"] = uid
+    context.user_data["ch_member_uname"] = uname
+    verb = "حذف و بن دائم" if action == "ban" else "اخراج ساده"
+    await update.message.reply_text(
+        f"⚠️ تأیید {verb}\n━━━━━━━━━━━━━━━\nکاربر: {label}\nکانال: {ch_target_label()}\n━━━━━━━━━━━━━━━\nمطمئنی؟",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بله، انجام بده", callback_data=f"chp_mok_{action}", style="danger")],
+            [InlineKeyboardButton("🚫 لغو", callback_data="chp_members")],
+        ]),
+    )
+    return ConversationHandler.END
+
+
+async def ch_member_do_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    action = query.data.rsplit("_", 1)[1]
+    uid = context.user_data.get("ch_member_uid")
+    uname = context.user_data.get("ch_member_uname", "")
+    tid = ch_target_id()
+    back = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 اعضا", callback_data="chp_members")]])
+    if not uid:
+        await safe_edit(query, "❌ کاربر مشخص نیست، دوباره شروع کن.", reply_markup=back)
+        return
+    label = f"{uid}" + (f" (@{uname})" if uname else "")
+    try:
+        await context.bot.ban_chat_member(tid, uid)
+        db_run("DELETE FROM channel_members WHERE chat_id=? AND user_id=?", (tid, uid))
+        if action == "kick":
+            await asyncio.sleep(0.3)
+            await context.bot.unban_chat_member(tid, uid, only_if_banned=True)
+            await safe_edit(query, f"👟 کاربر {label} اخراج شد (می‌تواند برگردد).", reply_markup=back)
+        else:
+            db_run(
+                "INSERT OR REPLACE INTO channel_bans (chat_id, user_id, username, date) VALUES (?,?,?,?)",
+                (tid, uid, uname, time.time()),
+            )
+            await safe_edit(query, f"🚫 کاربر {label} حذف و بن شد.", reply_markup=back)
+    except Exception as e:
+        await safe_edit(query, f"❌ انجام نشد: {e}\n\nبات باید دسترسی «افزودن اعضا» داشته باشد.",
+                        reply_markup=back)
+    finally:
+        context.user_data.pop("ch_member_uid", None)
+        context.user_data.pop("ch_member_uname", None)
+
+
+async def ch_bulk_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ch_guard(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await safe_edit(
+        query,
+        "📋 حذف گروهی اعضا\n\n"
+        "لیست آیدی‌های عددی را بفرست (هر خط یکی یا با فاصله):\n"
+        "123456789\n987654321\n\nسقف هر بار: ۵۰۰ نفر.",
+        reply_markup=cancel_kb(),
+    )
+    return CH_BULK_IDS
+
+
+async def ch_bulk_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return ConversationHandler.END
+    raw = ch_fa_digits(update.message.text or "")
+    ids = [int(t) for t in re.split(r"[\s,;]+", raw) if t.lstrip("-").isdigit()]
+    ids = [i for i in dict.fromkeys(ids) if i not in OWNER_IDS][:500]
+    if not ids:
+        await update.message.reply_text("❌ آیدی معتبری پیدا نشد.", reply_markup=cancel_kb())
+        return CH_BULK_IDS
+    context.user_data["ch_bulk_ids"] = ids
+    await update.message.reply_text(
+        f"⚠️ تأیید حذف گروهی\n━━━━━━━━━━━━━━━\nتعداد: {len(ids)} نفر\n"
+        f"کانال: {ch_target_label()}\n━━━━━━━━━━━━━━━\n❗️ همه بن می‌شوند. مطمئنی؟",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بله، همه را بن کن", callback_data="chp_bulkok", style="danger")],
+            [InlineKeyboardButton("🚫 لغو", callback_data="chp_members")],
+        ]),
+    )
+    return ConversationHandler.END
+
+
+async def ch_bulk_do_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    ids = context.user_data.get("ch_bulk_ids") or []
+    tid = ch_target_id()
+    back = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 اعضا", callback_data="chp_members")]])
+    if not ids:
+        await safe_edit(query, "❌ لیستی نیست.", reply_markup=back)
+        return
+    await safe_edit(query, f"⏳ در حال حذف {len(ids)} کاربر...")
+    ok = fail = 0
+    for uid in ids:
+        try:
+            await context.bot.ban_chat_member(tid, uid)
+            db_run(
+                "INSERT OR REPLACE INTO channel_bans (chat_id, user_id, username, date) VALUES (?,?,?,?)",
+                (tid, uid, "", time.time()),
+            )
+            db_run("DELETE FROM channel_members WHERE chat_id=? AND user_id=?", (tid, uid))
+            ok += 1
+        except Exception:
+            fail += 1
+        await asyncio.sleep(0.2)
+    context.user_data.pop("ch_bulk_ids", None)
+    await safe_edit(query, f"📋 نتیجه\n━━━━━━━━━━━━━━━\n✅ حذف‌شده: {ok}\n❌ ناموفق: {fail}", reply_markup=back)
+
+
+async def ch_banlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    tid = ch_target_id()
+    rows = db_all(
+        "SELECT user_id, username FROM channel_bans WHERE chat_id=? ORDER BY date DESC LIMIT 15",
+        (tid,),
+    )
+    if not rows:
+        await safe_edit(query, "🗂 لیست بن‌شده‌ها خالی است.", reply_markup=ch_members_kb(tid))
+        return
+    lines = ["🗂 آخرین بن‌شده‌ها", "━━━━━━━━━━━━━━━"]
+    kb = []
+    for r in rows:
+        tag = f"@{r['username']}" if r["username"] else str(r["user_id"])
+        lines.append(f"• {tag} — {r['user_id']}")
+        kb.append([InlineKeyboardButton(f"♻️ آنبن {tag[:20]}", callback_data=f"chp_ub_{r['user_id']}")])
+    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="chp_members")])
+    await safe_edit(query, "\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def ch_quick_unban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ch_guard(update):
+        return
+    query = update.callback_query
+    uid = int(query.data.rsplit("_", 1)[1])
+    tid = ch_target_id()
+    try:
+        await context.bot.unban_chat_member(tid, uid, only_if_banned=True)
+        db_run("DELETE FROM channel_bans WHERE chat_id=? AND user_id=?", (tid, uid))
+        await query.answer("♻️ آنبن شد")
+    except Exception as e:
+        await query.answer(f"❌ {e}"[:190], show_alert=True)
+        return
+    await ch_banlist_cb(update, context)
+
+
+# ==================== ✍️ ارسال پست ====================
 def ch_post_menu_kb():
     silent = "🔇" if get_setting("ch_post_silent") == "1" else "🔔"
     pin = "✅" if get_setting("ch_post_pin") == "1" else "❌"
@@ -4971,13 +5494,8 @@ async def ch_post_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await safe_edit(
         query,
-        "\n".join([
-            "✍️ ارسال پست به کانال",
-            "━━━━━━━━━━━━━━━",
-            f"کانال: {ch_target_label()}",
-            "متن، عکس، ویدیو، گیف، فایل و صدا پشتیبانی می‌شود.",
-            "می‌توانی دکمهٔ شیشه‌ای هم اضافه کنی.",
-        ]),
+        f"✍️ ارسال پست به کانال\n━━━━━━━━━━━━━━━\nکانال: {ch_target_label()}\n"
+        "متن، عکس، ویدیو، گیف، فایل و صدا پشتیبانی می‌شود.",
         reply_markup=ch_post_menu_kb(),
     )
 
@@ -4990,11 +5508,9 @@ async def ch_new_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["ch_post"] = {}
     await safe_edit(
         query,
-        "📝 پست جدید\n\n"
-        "محتوای پست را بفرست:\n"
-        "• متن ساده\n"
-        "• عکس / ویدیو / گیف / فایل / صدا (با کپشن دلخواه)\n\n"
-        "ℹ️ فرمت متن (بولد، لینک، ...) همان‌طور که می‌فرستی حفظ می‌شود.",
+        "📝 پست جدید\n\nمحتوای پست را بفرست:\n"
+        "• متن ساده\n• عکس / ویدیو / گیف / فایل / صدا (با کپشن)\n\n"
+        "ℹ️ فرمت متن حفظ می‌شود.",
         reply_markup=cancel_kb(),
     )
     return CH_POST_CONTENT
@@ -5010,7 +5526,7 @@ async def ch_new_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "preview": (msg.text or msg.caption or "[رسانه]")[:200],
     }
     await msg.reply_text(
-        "✅ محتوا ثبت شد.\n\nدکمهٔ شیشه‌ای هم می‌خواهی؟",
+        "✅ محتوا ثبت شد.\n\nدکمهٔ شیشه‌ای می‌خواهی؟",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ افزودن دکمه", callback_data="chp_btn")],
             [InlineKeyboardButton("👀 پیش‌نمایش و ارسال", callback_data="chp_preview", style="success")],
@@ -5027,10 +5543,7 @@ async def ch_btn_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await safe_edit(
         query,
-        "🔘 دکمهٔ شیشه‌ای\n\n"
-        "به این شکل بفرست (هر خط یک دکمه):\n"
-        "متن دکمه | https://example.com\n"
-        "کانال ما | https://t.me/mychannel",
+        "🔘 دکمهٔ شیشه‌ای\n\nهر خط یک دکمه:\nمتن دکمه | https://example.com\nکانال ما | https://t.me/mychannel",
         reply_markup=cancel_kb(),
     )
     return CH_POST_BUTTON
@@ -5049,16 +5562,11 @@ async def ch_btn_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
         if not url.startswith(("http://", "https://", "tg://")):
             url = "https://" + url.lstrip("@")
-        rows.append([InlineKeyboardButton(label, url=url)])
+        rows.append((label, url))
     if not rows:
-        await update.message.reply_text(
-            "❌ دکمهٔ معتبری پیدا نشد. قالب درست: متن دکمه | https://example.com",
-            reply_markup=cancel_kb(),
-        )
+        await update.message.reply_text("❌ قالب درست: متن دکمه | https://example.com", reply_markup=cancel_kb())
         return CH_POST_BUTTON
-    context.user_data.setdefault("ch_post", {})["buttons"] = [
-        [(b.text, b.url) for b in row] for row in rows
-    ]
+    context.user_data.setdefault("ch_post", {})["buttons"] = [[r] for r in rows]
     await update.message.reply_text(
         f"✅ {len(rows)} دکمه ثبت شد.",
         reply_markup=InlineKeyboardMarkup([
@@ -5084,9 +5592,8 @@ async def ch_preview_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = context.user_data.get("ch_post") or {}
     if not data.get("message_id"):
-        await safe_edit(query, "❌ محتوایی ثبت نشده. از اول شروع کن.", reply_markup=ch_post_menu_kb())
+        await safe_edit(query, "❌ محتوایی ثبت نشده.", reply_markup=ch_post_menu_kb())
         return ConversationHandler.END
-
     try:
         await context.bot.copy_message(
             chat_id=query.message.chat_id,
@@ -5097,16 +5604,14 @@ async def ch_preview_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.message.reply_text(f"⚠️ پیش‌نمایش ممکن نشد: {e}")
 
-    silent = get_setting("ch_post_silent") == "1"
-    pin = get_setting("ch_post_pin") == "1"
     autodel = get_setting("ch_autodel_min", "0")
     await query.message.reply_text(
         "\n".join([
-            "👆 این پیش‌نمایش پست است.",
+            "👆 پیش‌نمایش پست",
             "━━━━━━━━━━━━━━━",
             f"کانال: {ch_target_label()}",
-            f"بی‌صدا: {'بله' if silent else 'خیر'}",
-            f"پین خودکار: {'بله' if pin else 'خیر'}",
+            f"بی‌صدا: {'بله' if get_setting('ch_post_silent') == '1' else 'خیر'}",
+            f"پین خودکار: {'بله' if get_setting('ch_post_pin') == '1' else 'خیر'}",
             f"حذف خودکار: {(autodel + ' دقیقه') if autodel != '0' else 'خاموش'}",
             "━━━━━━━━━━━━━━━",
             "ارسال شود؟",
@@ -5129,19 +5634,16 @@ async def ch_send_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not tid or not data.get("message_id"):
         await safe_edit(query, "❌ اطلاعات ناقص است.", reply_markup=ch_post_menu_kb())
         return ConversationHandler.END
-
-    silent = get_setting("ch_post_silent") == "1"
     try:
         sent = await context.bot.copy_message(
             chat_id=tid,
             from_chat_id=data["from_chat_id"],
             message_id=data["message_id"],
             reply_markup=ch_build_markup(context),
-            disable_notification=silent,
+            disable_notification=get_setting("ch_post_silent") == "1",
         )
     except Exception as e:
-        await safe_edit(query, f"❌ ارسال نشد:\n{e}\n\nمطمئن شو بات دسترسی «ارسال پیام» در کانال دارد.",
-                        reply_markup=ch_post_menu_kb())
+        await safe_edit(query, f"❌ ارسال نشد:\n{e}", reply_markup=ch_post_menu_kb())
         return ConversationHandler.END
 
     mid = sent.message_id
@@ -5156,25 +5658,26 @@ async def ch_send_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             notes.append(f"⚠️ پین نشد: {e}")
 
-    autodel = int(get_setting("ch_autodel_min", "0") or 0)
+    try:
+        autodel = int(get_setting("ch_autodel_min", "0") or 0)
+    except Exception:
+        autodel = 0
     if autodel > 0:
         if getattr(context, "job_queue", None):
             context.job_queue.run_once(
                 ch_autodel_job, when=autodel * 60,
-                data={"chat_id": tid, "message_id": mid},
-                name=f"chautodel_{tid}_{mid}",
+                data={"chat_id": tid, "message_id": mid}, name=f"chautodel_{tid}_{mid}",
             )
             notes.append(f"⏳ بعد از {autodel} دقیقه حذف می‌شود")
         else:
-            notes.append("⚠️ حذف خودکار غیرفعال است (job queue نصب نیست)")
+            notes.append("⚠️ حذف خودکار غیرفعال (job-queue نصب نیست)")
 
     link = ch_post_link(mid)
-    lines = ["✅ پست ارسال شد", "━━━━━━━━━━━━━━━", f"آیدی پیام: {mid}"]
+    lines = ["✅ پست ارسال شد", "━━━━━━━━━━━━━━━", f"آیدی: {mid}"]
     if link:
         lines.append(f"لینک: {link}")
     lines += notes
     context.user_data.pop("ch_post", None)
-
     await query.message.reply_text(
         "\n".join(lines),
         reply_markup=InlineKeyboardMarkup([
@@ -5211,10 +5714,8 @@ async def ch_autodel_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await safe_edit(
         query,
-        "⏳ حذف خودکار پست‌ها\n\n"
-        "چند دقیقه بعد از ارسال، پست خودش حذف شود؟\n"
-        "عدد بفرست (۰ = خاموش).\n\n"
-        f"مقدار فعلی: {get_setting('ch_autodel_min', '0')}",
+        "⏳ حذف خودکار پست‌ها\n\nچند دقیقه بعد از ارسال، پست خودش حذف شود؟\n"
+        f"عدد بفرست (۰ = خاموش).\n\nمقدار فعلی: {get_setting('ch_autodel_min', '0')}",
         reply_markup=cancel_kb(),
     )
     return CH_AUTODEL
@@ -5235,7 +5736,6 @@ async def ch_autodel_receive(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ConversationHandler.END
 
 
-# -------------------- مدیریت آخرین پست --------------------
 def ch_last_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✏️ ویرایش متن/کپشن", callback_data="chp_edit")],
@@ -5255,17 +5755,11 @@ async def ch_last_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     mid = get_setting("ch_last_post_id", "")
     if not mid:
-        await safe_edit(query, "❌ هنوز پستی از طریق پنل ارسال نشده.", reply_markup=ch_post_menu_kb())
+        await safe_edit(query, "❌ هنوز پستی از پنل ارسال نشده.", reply_markup=ch_post_menu_kb())
         return
-    link = ch_post_link(int(mid))
     await safe_edit(
         query,
-        "\n".join([
-            "🔁 آخرین پست ارسالی",
-            "━━━━━━━━━━━━━━━",
-            f"آیدی: {mid}",
-            f"لینک: {link or '—'}",
-        ]),
+        f"🔁 آخرین پست\n━━━━━━━━━━━━━━━\nآیدی: {mid}\nلینک: {ch_post_link(int(mid)) or '—'}",
         reply_markup=ch_last_kb(),
     )
 
@@ -5274,7 +5768,11 @@ async def ch_pin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ch_guard(update):
         return
     query = update.callback_query
-    tid, mid = ch_target_id(), get_setting("ch_last_post_id", "")
+    tid = ch_target_id()
+    mid = get_setting("ch_last_post_id", "")
+    if not mid or not tid:
+        await query.answer("❌ پستی ثبت نشده.", show_alert=True)
+        return
     try:
         if query.data == "chp_pin":
             await context.bot.pin_chat_message(tid, int(mid), disable_notification=True)
@@ -5291,7 +5789,8 @@ async def ch_dellast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     query = update.callback_query
     await query.answer()
-    tid, mid = ch_target_id(), get_setting("ch_last_post_id", "")
+    tid = ch_target_id()
+    mid = get_setting("ch_last_post_id", "")
     if not mid:
         await safe_edit(query, "❌ پستی ثبت نشده.", reply_markup=ch_post_menu_kb())
         return
@@ -5320,328 +5819,30 @@ async def ch_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ch_edit_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id):
         return ConversationHandler.END
-    tid, mid = ch_target_id(), int(get_setting("ch_last_post_id", "0") or 0)
+    tid = ch_target_id()
+    try:
+        mid = int(get_setting("ch_last_post_id", "0") or 0)
+    except Exception:
+        mid = 0
     new_text = update.message.text or ""
     done = False
     err = ""
-    for fn in ("edit_message_text", "edit_message_caption"):
-        try:
-            if fn == "edit_message_text":
-                await context.bot.edit_message_text(chat_id=tid, message_id=mid, text=new_text)
-            else:
-                await context.bot.edit_message_caption(chat_id=tid, message_id=mid, caption=new_text)
-            done = True
-            break
-        except Exception as e:
-            err = str(e)
+    if mid:
+        for fn in ("text", "caption"):
+            try:
+                if fn == "text":
+                    await context.bot.edit_message_text(chat_id=tid, message_id=mid, text=new_text)
+                else:
+                    await context.bot.edit_message_caption(chat_id=tid, message_id=mid, caption=new_text)
+                done = True
+                break
+            except Exception as e:
+                err = str(e)
     await update.message.reply_text(
         "✅ پست ویرایش شد." if done else f"❌ ویرایش نشد: {err}",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 پنل", callback_data="chp_home")]]),
     )
     return ConversationHandler.END
-
-
-# ==================== 👥 مدیریت اعضا ====================
-def ch_members_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚫 حذف و بن کاربر", callback_data="chp_ban", style="danger")],
-        [InlineKeyboardButton("👟 اخراج ساده (اجازهٔ برگشت)", callback_data="chp_kick")],
-        [InlineKeyboardButton("♻️ آنبن کاربر", callback_data="chp_unban")],
-        [InlineKeyboardButton("📋 حذف گروهی با لیست آیدی", callback_data="chp_bulk", style="danger")],
-        [InlineKeyboardButton("🗂 لیست بن‌شده‌ها", callback_data="chp_banlist")],
-        [InlineKeyboardButton("🔍 استعلام وضعیت کاربر", callback_data="chp_who")],
-        [InlineKeyboardButton("🔙 پنل", callback_data="chp_home")],
-    ])
-
-
-async def ch_members_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ch_guard(update):
-        return
-    query = update.callback_query
-    await query.answer()
-    if not await ch_need_target(update):
-        return
-    members = "—"
-    try:
-        members = await context.bot.get_chat_member_count(ch_target_id())
-    except Exception:
-        pass
-    await safe_edit(
-        query,
-        "\n".join([
-            "👥 مدیریت اعضای کانال",
-            "━━━━━━━━━━━━━━━",
-            f"کانال: {ch_target_label()}",
-            f"تعداد اعضا: {members}",
-            "━━━━━━━━━━━━━━━",
-            "ℹ️ «حذف و بن» کاربر را بیرون می‌کند و اجازهٔ برگشت نمی‌دهد.",
-            "«اخراج ساده» بیرون می‌کند ولی می‌تواند دوباره جوین شود.",
-            "⚠️ تلگرام لیست کامل اعضای کانال را به بات نمی‌دهد؛ باید آیدی عددی کاربر را بدهی",
-            "یا یک پیام از او را فوروارد کنی.",
-        ]),
-        reply_markup=ch_members_kb(),
-    )
-
-
-async def ch_resolve_user(context, msg):
-    """از پیام، آیدی کاربر را بیرون می‌کشد: فوروارد، آیدی عددی، یا یوزرنیم."""
-    fwd = getattr(msg, "forward_from", None)
-    if fwd is not None:
-        return fwd.id, (fwd.username or fwd.first_name or "")
-    origin = getattr(msg, "forward_origin", None)
-    sender = getattr(origin, "sender_user", None) if origin else None
-    if sender is not None:
-        return sender.id, (sender.username or sender.first_name or "")
-
-    raw = ch_fa_digits((msg.text or "").strip())
-    if raw.lstrip("-").isdigit():
-        return int(raw), ""
-    if raw:
-        ref = raw if raw.startswith("@") else "@" + raw.lstrip("@")
-        try:
-            chat = await context.bot.get_chat(ref)
-            return chat.id, (getattr(chat, "username", "") or "")
-        except Exception:
-            return None, ""
-    return None, ""
-
-
-def ch_member_prompt(action: str) -> str:
-    return (
-        f"{action}\n\n"
-        "کاربر را مشخص کن:\n"
-        "• آیدی عددی، مثل 123456789\n"
-        "• یوزرنیم، مثل @username\n"
-        "• یا یک پیام از او را فوروارد کن (مطمئن‌ترین راه)\n\n"
-        "ℹ️ اگر یوزرنیم جواب نداد، حتماً آیدی عددی یا فوروارد بفرست."
-    )
-
-
-async def ch_ban_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ch_guard(update):
-        return ConversationHandler.END
-    query = update.callback_query
-    await query.answer()
-    kind = {"chp_ban": "ban", "chp_kick": "kick", "chp_unban": "unban", "chp_who": "who"}[query.data]
-    context.user_data["ch_member_action"] = kind
-    titles = {
-        "ban": "🚫 حذف و بن کاربر از کانال",
-        "kick": "👟 اخراج ساده از کانال",
-        "unban": "♻️ آنبن کاربر",
-        "who": "🔍 استعلام وضعیت کاربر",
-    }
-    await safe_edit(query, ch_member_prompt(titles[kind]), reply_markup=cancel_kb())
-    return CH_MEMBER_REF
-
-
-async def ch_member_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update.effective_user.id):
-        return ConversationHandler.END
-    action = context.user_data.get("ch_member_action", "who")
-    tid = ch_target_id()
-    uid, uname = await ch_resolve_user(context, update.message)
-    if not uid:
-        await update.message.reply_text(
-            "❌ کاربر پیدا نشد. آیدی عددی بفرست یا یک پیام از او را فوروارد کن.",
-            reply_markup=cancel_kb(),
-        )
-        return CH_MEMBER_REF
-
-    back = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 مدیریت اعضا", callback_data="chp_members")]])
-    label = f"{uid}" + (f" (@{uname})" if uname else "")
-
-    if action == "who":
-        try:
-            m = await context.bot.get_chat_member(tid, uid)
-            info = [
-                "🔍 وضعیت کاربر",
-                "━━━━━━━━━━━━━━━",
-                f"کاربر: {label}",
-                f"وضعیت: {m.status}",
-            ]
-            u = getattr(m, "user", None)
-            if u is not None:
-                info.append(f"نام: {u.full_name}")
-                if u.username:
-                    info.append(f"یوزرنیم: @{u.username}")
-            await update.message.reply_text("\n".join(info), reply_markup=back)
-        except Exception as e:
-            await update.message.reply_text(f"❌ استعلام نشد: {e}", reply_markup=back)
-        return ConversationHandler.END
-
-    if action == "unban":
-        try:
-            await context.bot.unban_chat_member(tid, uid, only_if_banned=True)
-            db_run("DELETE FROM channel_bans WHERE chat_id=? AND user_id=?", (tid, uid))
-            await update.message.reply_text(f"♻️ کاربر {label} آنبن شد.", reply_markup=back)
-        except Exception as e:
-            await update.message.reply_text(f"❌ آنبن نشد: {e}", reply_markup=back)
-        return ConversationHandler.END
-
-    context.user_data["ch_member_uid"] = uid
-    context.user_data["ch_member_uname"] = uname
-    verb = "حذف و بن دائم" if action == "ban" else "اخراج ساده"
-    await update.message.reply_text(
-        "\n".join([
-            f"⚠️ تأیید {verb}",
-            "━━━━━━━━━━━━━━━",
-            f"کاربر: {label}",
-            f"کانال: {ch_target_label()}",
-            "━━━━━━━━━━━━━━━",
-            "مطمئنی؟",
-        ]),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ بله، انجام بده", callback_data=f"chp_mok_{action}", style="danger")],
-            [InlineKeyboardButton("🚫 لغو", callback_data="chp_members")],
-        ]),
-    )
-    return ConversationHandler.END
-
-
-async def ch_member_do_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ch_guard(update):
-        return
-    query = update.callback_query
-    await query.answer()
-    action = query.data.rsplit("_", 1)[1]
-    uid = context.user_data.get("ch_member_uid")
-    uname = context.user_data.get("ch_member_uname", "")
-    tid = ch_target_id()
-    back = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 مدیریت اعضا", callback_data="chp_members")]])
-    if not uid:
-        await safe_edit(query, "❌ کاربر مشخص نیست، دوباره شروع کن.", reply_markup=back)
-        return
-    label = f"{uid}" + (f" (@{uname})" if uname else "")
-    try:
-        await context.bot.ban_chat_member(tid, uid)
-        if action == "kick":
-            await asyncio.sleep(0.3)
-            await context.bot.unban_chat_member(tid, uid, only_if_banned=True)
-            await safe_edit(query, f"👟 کاربر {label} از کانال اخراج شد (می‌تواند دوباره جوین شود).",
-                            reply_markup=back)
-        else:
-            db_run(
-                "INSERT OR REPLACE INTO channel_bans (chat_id, user_id, username, date) VALUES (?,?,?,?)",
-                (tid, uid, uname, time.time()),
-            )
-            await safe_edit(query, f"🚫 کاربر {label} حذف و بن شد.", reply_markup=back)
-    except Exception as e:
-        await safe_edit(query, f"❌ انجام نشد: {e}\n\nمطمئن شو بات دسترسی «افزودن اعضا/محدودسازی» دارد.",
-                        reply_markup=back)
-    finally:
-        context.user_data.pop("ch_member_uid", None)
-        context.user_data.pop("ch_member_uname", None)
-
-
-async def ch_bulk_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ch_guard(update):
-        return ConversationHandler.END
-    query = update.callback_query
-    await query.answer()
-    await safe_edit(
-        query,
-        "📋 حذف گروهی اعضا\n\n"
-        "لیست آیدی‌های عددی را بفرست (هر خط یکی، یا با فاصله/کاما):\n"
-        "123456789\n987654321\n\n"
-        "همه «حذف و بن» می‌شوند. سقف هر بار: ۲۰۰ کاربر.",
-        reply_markup=cancel_kb(),
-    )
-    return CH_BULK_IDS
-
-
-async def ch_bulk_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update.effective_user.id):
-        return ConversationHandler.END
-    raw = ch_fa_digits((update.message.text or ""))
-    ids = [int(t) for t in re.split(r"[\s,;]+", raw) if t.lstrip("-").isdigit()]
-    ids = list(dict.fromkeys(ids))[:200]
-    if not ids:
-        await update.message.reply_text("❌ آیدی معتبری پیدا نشد.", reply_markup=cancel_kb())
-        return CH_BULK_IDS
-    context.user_data["ch_bulk_ids"] = ids
-    await update.message.reply_text(
-        "\n".join([
-            "⚠️ تأیید حذف گروهی",
-            "━━━━━━━━━━━━━━━",
-            f"تعداد کاربر: {len(ids)}",
-            f"کانال: {ch_target_label()}",
-            "━━━━━━━━━━━━━━━",
-            "❗️ همه بن می‌شوند. مطمئنی؟",
-        ]),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ بله، همه را بن کن", callback_data="chp_bulkok", style="danger")],
-            [InlineKeyboardButton("🚫 لغو", callback_data="chp_members")],
-        ]),
-    )
-    return ConversationHandler.END
-
-
-async def ch_bulk_do_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ch_guard(update):
-        return
-    query = update.callback_query
-    await query.answer()
-    ids = context.user_data.get("ch_bulk_ids") or []
-    tid = ch_target_id()
-    back = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 مدیریت اعضا", callback_data="chp_members")]])
-    if not ids:
-        await safe_edit(query, "❌ لیستی نیست.", reply_markup=back)
-        return
-    await safe_edit(query, f"⏳ در حال بن کردن {len(ids)} کاربر...")
-    ok, fail = 0, 0
-    for uid in ids:
-        try:
-            await context.bot.ban_chat_member(tid, uid)
-            db_run(
-                "INSERT OR REPLACE INTO channel_bans (chat_id, user_id, username, date) VALUES (?,?,?,?)",
-                (tid, uid, "", time.time()),
-            )
-            ok += 1
-        except Exception:
-            fail += 1
-        await asyncio.sleep(0.25)
-    context.user_data.pop("ch_bulk_ids", None)
-    await safe_edit(query, f"📋 نتیجه\n━━━━━━━━━━━━━━━\n✅ بن‌شده: {ok}\n❌ ناموفق: {fail}", reply_markup=back)
-
-
-async def ch_banlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ch_guard(update):
-        return
-    query = update.callback_query
-    await query.answer()
-    tid = ch_target_id()
-    rows = db_all(
-        "SELECT user_id, username, date FROM channel_bans WHERE chat_id=? ORDER BY date DESC LIMIT 20",
-        (tid,),
-    )
-    if not rows:
-        await safe_edit(query, "🗂 لیست بن‌شده‌ها خالی است.\n\n(فقط بن‌هایی که از این پنل انجام شده ثبت می‌شوند.)",
-                        reply_markup=ch_members_kb())
-        return
-    lines = ["🗂 آخرین بن‌شده‌ها", "━━━━━━━━━━━━━━━"]
-    kb = []
-    for r in rows:
-        tag = f"@{r['username']}" if r["username"] else str(r["user_id"])
-        lines.append(f"• {tag} — {r['user_id']}")
-        kb.append([InlineKeyboardButton(f"♻️ آنبن {tag}", callback_data=f"chp_ub_{r['user_id']}")])
-    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="chp_members")])
-    await safe_edit(query, "\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def ch_quick_unban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ch_guard(update):
-        return
-    query = update.callback_query
-    uid = int(query.data.rsplit("_", 1)[1])
-    tid = ch_target_id()
-    try:
-        await context.bot.unban_chat_member(tid, uid, only_if_banned=True)
-        db_run("DELETE FROM channel_bans WHERE chat_id=? AND user_id=?", (tid, uid))
-        await query.answer("♻️ آنبن شد")
-    except Exception as e:
-        await query.answer(f"❌ {e}"[:190], show_alert=True)
-        return
-    await ch_banlist_cb(update, context)
 
 
 # ==================== ⚙️ تنظیمات کانال ====================
@@ -5651,7 +5852,7 @@ def ch_settings_kb():
         [InlineKeyboardButton("📄 تغییر بیو/توضیحات", callback_data="chp_desc")],
         [InlineKeyboardButton("🔗 ساخت لینک دعوت جدید", callback_data="chp_newlink")],
         [InlineKeyboardButton("📍 آنپین کردن همهٔ پیام‌ها", callback_data="chp_unpinall")],
-        [InlineKeyboardButton("🧾 پاک کردن سابقهٔ ردیابی", callback_data="chp_clrtrack")],
+        [InlineKeyboardButton("🧾 پاک کردن سابقهٔ داخلی بات", callback_data="chp_clrtrack")],
         [InlineKeyboardButton("🔙 پنل", callback_data="chp_home")],
     ])
 
@@ -5663,11 +5864,8 @@ async def ch_settings_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if not await ch_need_target(update):
         return
-    await safe_edit(
-        query,
-        f"⚙️ تنظیمات کانال\n━━━━━━━━━━━━━━━\n{ch_target_label()}",
-        reply_markup=ch_settings_kb(),
-    )
+    await safe_edit(query, f"⚙️ تنظیمات کانال\n━━━━━━━━━━━━━━━\n{ch_target_label()}",
+                    reply_markup=ch_settings_kb())
 
 
 async def ch_title_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5677,8 +5875,8 @@ async def ch_title_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     kind = "title" if query.data == "chp_title" else "desc"
     context.user_data["ch_meta_kind"] = kind
-    prompt = "🏷 نام جدید کانال را بفرست:" if kind == "title" else "📄 توضیحات جدید کانال را بفرست:"
-    await safe_edit(query, prompt, reply_markup=cancel_kb())
+    await safe_edit(query, "🏷 نام جدید کانال را بفرست:" if kind == "title" else "📄 توضیحات جدید را بفرست:",
+                    reply_markup=cancel_kb())
     return CH_SET_META
 
 
@@ -5696,10 +5894,9 @@ async def ch_title_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ نام کانال تغییر کرد.", reply_markup=back)
         else:
             await context.bot.set_chat_description(tid, val)
-            await update.message.reply_text("✅ توضیحات کانال تغییر کرد.", reply_markup=back)
+            await update.message.reply_text("✅ توضیحات تغییر کرد.", reply_markup=back)
     except Exception as e:
-        await update.message.reply_text(f"❌ انجام نشد: {e}\n\nبات باید دسترسی «تغییر مشخصات کانال» داشته باشد.",
-                                        reply_markup=back)
+        await update.message.reply_text(f"❌ انجام نشد: {e}", reply_markup=back)
     return ConversationHandler.END
 
 
@@ -5711,7 +5908,7 @@ async def ch_newlink_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     back = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 تنظیمات", callback_data="chp_settings")]])
     try:
         link = await context.bot.create_chat_invite_link(ch_target_id())
-        await safe_edit(query, f"🔗 لینک دعوت جدید ساخته شد:\n{link.invite_link}", reply_markup=back)
+        await safe_edit(query, f"🔗 لینک دعوت جدید:\n{link.invite_link}", reply_markup=back)
     except Exception as e:
         await safe_edit(query, f"❌ ساخت لینک نشد: {e}", reply_markup=back)
 
@@ -5724,7 +5921,7 @@ async def ch_unpinall_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     back = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 تنظیمات", callback_data="chp_settings")]])
     try:
         await context.bot.unpin_all_chat_messages(ch_target_id())
-        await safe_edit(query, "📍 همهٔ پیام‌های پین‌شده آنپین شدند.", reply_markup=back)
+        await safe_edit(query, "📍 همهٔ پین‌ها برداشته شد.", reply_markup=back)
     except Exception as e:
         await safe_edit(query, f"❌ انجام نشد: {e}", reply_markup=back)
 
@@ -5739,15 +5936,9 @@ async def ch_clrtrack_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_run("DELETE FROM channel_posts WHERE chat_id=?", (tid,))
     await safe_edit(
         query,
-        f"🧾 سابقهٔ ردیابی پاک شد ({n} رکورد).\n\nℹ️ این کار پیام‌های کانال را حذف نمی‌کند، فقط لیست داخلی بات را خالی می‌کند.",
+        f"🧾 سابقهٔ داخلی پاک شد ({n} رکورد).\n\nℹ️ پیام‌های کانال حذف نشدند.",
         reply_markup=ch_settings_kb(),
     )
-
-
-# -------------------- کمکی: تبدیل اعداد فارسی --------------------
-def ch_fa_digits(s: str) -> str:
-    table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-    return (s or "").translate(table)
 
 
 # ==================== خطاها ====================
@@ -6085,6 +6276,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("kir", ch_panel_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POSTS, ch_post_tracker), group=1)
+    app.add_handler(ChatMemberHandler(ch_member_tracker, ChatMemberHandler.ANY_CHAT_MEMBER), group=1)
     app.add_handler(MessageHandler(filters.Sticker.ALL, sticker_id_grabber))
     app.add_handler(CallbackQueryHandler(check_join_cb, pattern=r"^check_join$"))
 
@@ -6177,9 +6369,7 @@ def main():
             CallbackQueryHandler(ch_setch_entry, pattern=r"^chp_setch$"),
             MessageHandler(filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND, ch_setch_receive),
         ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
+        fallbacks=common_fallbacks, conversation_timeout=CONV_TIMEOUT, per_user=True,
     )
 
     ch_delcount_conv = ConversationHandler(
@@ -6188,42 +6378,16 @@ def main():
             CallbackQueryHandler(ch_del_custom_entry, pattern=r"^chp_dcustom$"),
             MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, ch_del_custom_receive),
         ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
+        fallbacks=common_fallbacks, conversation_timeout=CONV_TIMEOUT, per_user=True,
     )
 
     ch_delid_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(ch_del_id_entry, pattern=r"^chp_did$")],
         states={CH_DEL_BY_ID: [
             CallbackQueryHandler(ch_del_id_entry, pattern=r"^chp_did$"),
-            MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, ch_del_id_receive),
+            MessageHandler(filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND, ch_del_id_receive),
         ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
-    )
-
-    ch_delrange_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(ch_del_range_entry, pattern=r"^chp_drange$")],
-        states={CH_DEL_RANGE: [
-            CallbackQueryHandler(ch_del_range_entry, pattern=r"^chp_drange$"),
-            MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, ch_del_range_receive),
-        ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
-    )
-
-    ch_purge_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(ch_purge_entry, pattern=r"^chp_dpurge$")],
-        states={CH_PURGE: [
-            CallbackQueryHandler(ch_purge_entry, pattern=r"^chp_dpurge$"),
-            MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, ch_purge_receive),
-        ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
+        fallbacks=common_fallbacks, conversation_timeout=CONV_TIMEOUT, per_user=True,
     )
 
     ch_post_conv = ConversationHandler(
@@ -6245,9 +6409,7 @@ def main():
                 CallbackQueryHandler(ch_preview_cb, pattern=r"^chp_preview$"),
             ],
         },
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
+        fallbacks=common_fallbacks, conversation_timeout=CONV_TIMEOUT, per_user=True,
     )
 
     ch_edit_conv = ConversationHandler(
@@ -6256,9 +6418,7 @@ def main():
             CallbackQueryHandler(ch_edit_entry, pattern=r"^chp_edit$"),
             MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, ch_edit_receive),
         ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
+        fallbacks=common_fallbacks, conversation_timeout=CONV_TIMEOUT, per_user=True,
     )
 
     ch_autodel_conv = ConversationHandler(
@@ -6267,9 +6427,7 @@ def main():
             CallbackQueryHandler(ch_autodel_entry, pattern=r"^chp_autodel$"),
             MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, ch_autodel_receive),
         ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
+        fallbacks=common_fallbacks, conversation_timeout=CONV_TIMEOUT, per_user=True,
     )
 
     ch_member_conv = ConversationHandler(
@@ -6278,9 +6436,7 @@ def main():
             CallbackQueryHandler(ch_ban_entry, pattern=r"^chp_(ban|kick|unban|who)$"),
             MessageHandler(filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND, ch_member_receive),
         ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
+        fallbacks=common_fallbacks, conversation_timeout=CONV_TIMEOUT, per_user=True,
     )
 
     ch_bulk_conv = ConversationHandler(
@@ -6289,9 +6445,7 @@ def main():
             CallbackQueryHandler(ch_bulk_entry, pattern=r"^chp_bulk$"),
             MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, ch_bulk_receive),
         ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
+        fallbacks=common_fallbacks, conversation_timeout=CONV_TIMEOUT, per_user=True,
     )
 
     ch_meta_conv = ConversationHandler(
@@ -6300,35 +6454,45 @@ def main():
             CallbackQueryHandler(ch_title_entry, pattern=r"^chp_(title|desc)$"),
             MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, ch_title_receive),
         ]},
-        fallbacks=common_fallbacks,
-        conversation_timeout=CONV_TIMEOUT,
-        per_user=True,
+        fallbacks=common_fallbacks, conversation_timeout=CONV_TIMEOUT, per_user=True,
     )
 
     for conv in (
-        ch_setch_conv, ch_delcount_conv, ch_delid_conv, ch_delrange_conv, ch_purge_conv,
-        ch_post_conv, ch_edit_conv, ch_autodel_conv, ch_member_conv, ch_bulk_conv, ch_meta_conv,
+        ch_setch_conv, ch_delcount_conv, ch_delid_conv, ch_post_conv, ch_edit_conv,
+        ch_autodel_conv, ch_member_conv, ch_bulk_conv, ch_meta_conv,
     ):
         app.add_handler(conv)
+
+    # دکمهٔ توقف باید همیشه و بدون انتظار پردازش شود (block=False)
+    app.add_handler(CallbackQueryHandler(ch_stop_cb, pattern=r"^chp_stop$", block=False))
 
     app.add_handler(CallbackQueryHandler(ch_home_cb, pattern=r"^chp_home$"))
     app.add_handler(CallbackQueryHandler(ch_close_cb, pattern=r"^chp_close$"))
     app.add_handler(CallbackQueryHandler(ch_toggle_cb, pattern=r"^chp_tg_(silent|pin)$"))
     app.add_handler(CallbackQueryHandler(ch_perms_cb, pattern=r"^chp_perms$"))
     app.add_handler(CallbackQueryHandler(ch_stats_cb, pattern=r"^chp_stats$"))
+
     app.add_handler(CallbackQueryHandler(ch_del_menu_cb, pattern=r"^chp_del$"))
-    app.add_handler(CallbackQueryHandler(ch_del_n_cb, pattern=r"^chp_dn_\d+$"))
-    app.add_handler(CallbackQueryHandler(ch_del_all_cb, pattern=r"^chp_dall$"))
-    app.add_handler(CallbackQueryHandler(ch_del_confirm_cb, pattern=r"^chp_ok_(last|all|range)_[\d\-]+$"))
+    app.add_handler(CallbackQueryHandler(ch_del_n_cb, pattern=r"^chp_dn_\d+$", block=False))
+    app.add_handler(CallbackQueryHandler(ch_wipe_cb, pattern=r"^chp_dwipe$", block=False))
+    app.add_handler(CallbackQueryHandler(ch_go_cb, pattern=r"^chp_go_\d+_\d+$", block=False))
+
+    app.add_handler(CallbackQueryHandler(ch_members_cb, pattern=r"^chp_members$"))
+    app.add_handler(CallbackQueryHandler(ch_scan_cb, pattern=r"^chp_scan$", block=False))
+    app.add_handler(CallbackQueryHandler(ch_list_cb, pattern=r"^chp_list_\d+$"))
+    app.add_handler(CallbackQueryHandler(ch_kick_one_cb, pattern=r"^chp_kk_\d+$"))
+    app.add_handler(CallbackQueryHandler(ch_kick_all_cb, pattern=r"^chp_kkall$"))
+    app.add_handler(CallbackQueryHandler(ch_kick_all_do_cb, pattern=r"^chp_kkallok$", block=False))
+    app.add_handler(CallbackQueryHandler(ch_member_do_cb, pattern=r"^chp_mok_(ban|kick)$"))
+    app.add_handler(CallbackQueryHandler(ch_bulk_do_cb, pattern=r"^chp_bulkok$", block=False))
+    app.add_handler(CallbackQueryHandler(ch_banlist_cb, pattern=r"^chp_banlist$"))
+    app.add_handler(CallbackQueryHandler(ch_quick_unban_cb, pattern=r"^chp_ub_\d+$"))
+
     app.add_handler(CallbackQueryHandler(ch_post_menu_cb, pattern=r"^chp_post$"))
     app.add_handler(CallbackQueryHandler(ch_last_cb, pattern=r"^chp_last$"))
     app.add_handler(CallbackQueryHandler(ch_pin_cb, pattern=r"^chp_(pin|unpin)$"))
     app.add_handler(CallbackQueryHandler(ch_dellast_cb, pattern=r"^chp_dellast$"))
-    app.add_handler(CallbackQueryHandler(ch_members_cb, pattern=r"^chp_members$"))
-    app.add_handler(CallbackQueryHandler(ch_member_do_cb, pattern=r"^chp_mok_(ban|kick)$"))
-    app.add_handler(CallbackQueryHandler(ch_bulk_do_cb, pattern=r"^chp_bulkok$"))
-    app.add_handler(CallbackQueryHandler(ch_banlist_cb, pattern=r"^chp_banlist$"))
-    app.add_handler(CallbackQueryHandler(ch_quick_unban_cb, pattern=r"^chp_ub_\d+$"))
+
     app.add_handler(CallbackQueryHandler(ch_settings_cb, pattern=r"^chp_settings$"))
     app.add_handler(CallbackQueryHandler(ch_newlink_cb, pattern=r"^chp_newlink$"))
     app.add_handler(CallbackQueryHandler(ch_unpinall_cb, pattern=r"^chp_unpinall$"))
@@ -6339,7 +6503,8 @@ def main():
     app.add_error_handler(error_handler)
 
     print("🚀 بات ویتو استور اجرا شد!")
-    app.run_polling()
+    # allowed_updates را کامل می‌خواهیم تا آپدیت‌های عضویت کانال (chat_member) هم برسند
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
