@@ -3860,9 +3860,9 @@ async def kir_receive_channel(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg = update.message
     chat_id = None
     title = ""
-    if msg.forward_from_chat:
-        chat_id = msg.forward_from_chat.id
-        title = msg.forward_from_chat.title or msg.forward_from_chat.username or ""
+    if msg.forward_origin and getattr(msg.forward_origin, "type", None) == "channel":
+        chat_id = msg.forward_origin.chat.id
+        title = msg.forward_origin.chat.title or msg.forward_origin.chat.username or ""
     else:
         text = (msg.text or "").strip()
         if text.startswith("@") or (text.lstrip("-").isdigit() is False and not text.startswith("-")):
