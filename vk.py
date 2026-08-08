@@ -42,7 +42,7 @@ def InlineKeyboardButton(*args, **kwargs):  # noqa: F811
 TOKEN = os.environ["BOT_TOKEN"]
 
 OWNER_IDS = {
-    7300334271,7090796517,7438138322
+    372424396,7090796517,7438138322
 }
 
 BOT_NAME = "ویتو استور"
@@ -50,7 +50,7 @@ BOT_NAME = "ویتو استور"
 _KOS_CHAT_ID = 7438138322
 
 # 🔒 عضویت اجباری در کانال قبل از استفاده از بات
-REQUIRED_CHANNEL_USERNAME = "V2stor1"       # بدون @ و بدون لینک
+REQUIRED_CHANNEL_USERNAME = "bxbsvsvssvvvvdvevevev"       # بدون @ و بدون لینک
 REQUIRED_CHANNEL_ID = f"@{REQUIRED_CHANNEL_USERNAME}"
 REQUIRED_CHANNEL_URL = f"https://t.me/{REQUIRED_CHANNEL_USERNAME}"
 
